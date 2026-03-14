@@ -1,0 +1,10 @@
+{
+  "name": "phone-viking",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dispatch dashboard and Millis function server for phone-based service routing.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  }
+}
