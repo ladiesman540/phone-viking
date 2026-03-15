@@ -12,10 +12,6 @@
         <div class="hero-copy">
           <p class="eyebrow">Dispatch Control</p>
           <h1>Phone Viking Routing Dashboard</h1>
-          <p class="hero-text">
-            Define intake fields, routing combinations, contact tiers, and the Millis webhook functions that will drive
-            the phone workflow.
-          </p>
         </div>
         <div class="hero-actions">
           <button id="save-config" class="button button-primary">Save Dashboard</button>
@@ -24,195 +20,249 @@
         </div>
       </header>
 
-      <main class="layout-grid">
-        <section class="panel span-12">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Environment</p>
-              <h2>Workspace and Integrations</h2>
-            </div>
-          </div>
-          <div class="form-grid">
-            <label>
-              <span>Business name</span>
-              <input data-path="workspace.businessName" type="text" />
-            </label>
-            <label>
-              <span>Timezone</span>
-              <input data-path="workspace.timezone" type="text" />
-            </label>
-            <label>
-              <span>Business days</span>
-              <input data-path="workspace.businessHours.daysCsv" type="text" placeholder="mon,tue,wed,thu,fri" />
-            </label>
-            <label>
-              <span>Start hour</span>
-              <input data-path="workspace.businessHours.startHour" type="number" min="0" max="23" />
-            </label>
-            <label>
-              <span>End hour</span>
-              <input data-path="workspace.businessHours.endHour" type="number" min="0" max="23" />
-            </label>
-            <label>
-              <span>Slack channel label</span>
-              <input data-path="slack.channelLabel" type="text" placeholder="#dispatch" />
-            </label>
-            <label class="wide">
-              <span>Slack webhook URL</span>
-              <input data-path="slack.webhookUrl" type="text" placeholder="https://hooks.slack.com/..." />
-            </label>
-            <label class="checkbox">
-              <input data-path="slack.enabled" type="checkbox" />
-              <span>Enable Slack sends from this dashboard</span>
-            </label>
-            <label>
-              <span>Twilio voice number</span>
-              <input data-path="twilio.voiceNumber" type="text" placeholder="+1..." />
-            </label>
-            <label>
-              <span>Twilio SMS number</span>
-              <input data-path="twilio.smsNumber" type="text" placeholder="+1..." />
-            </label>
-            <label>
-              <span>Millis intake agent ID</span>
-              <input data-path="millis.intakeAgentId" type="text" />
-            </label>
-            <label>
-              <span>Millis dispatch agent ID</span>
-              <input data-path="millis.dispatchAgentId" type="text" />
-            </label>
-            <label class="wide">
-              <span>Millis API key</span>
-              <input data-path="millis.apiKey" type="password" />
-            </label>
-          </div>
-        </section>
+      <nav class="tab-bar">
+        <button class="tab-button active" data-tab="jobs">Jobs</button>
+        <button class="tab-button" data-tab="contacts">Contacts</button>
+        <button class="tab-button" data-tab="routing">Routing</button>
+        <button class="tab-button" data-tab="setup">Setup</button>
+      </nav>
 
-        <section class="panel span-5">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Intake</p>
-              <h2>Caller Fields</h2>
-            </div>
-            <button id="add-field" class="button button-secondary">Add field</button>
-          </div>
-          <div id="intake-fields" class="stack"></div>
-        </section>
+      <main>
+        <div class="tab-panel active" data-tab="jobs">
+          <p class="tab-desc">Active and recent dispatch jobs. Expand the simulator at the bottom to fire a test.</p>
+          <div class="tab-stack">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Jobs</p>
+                  <h2>Recent Requests</h2>
+                </div>
+              </div>
+              <div id="jobs" class="stack"></div>
+            </section>
 
-        <section class="panel span-7">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Messaging</p>
-              <h2>Templates</h2>
-            </div>
+            <details class="panel simulator-details">
+              <summary class="panel-header clickable">
+                <div>
+                  <p class="eyebrow">Simulator</p>
+                  <h2>Create Test Job</h2>
+                </div>
+              </summary>
+              <div class="simulator-body">
+                <div class="form-grid">
+                  <label>
+                    <span>Caller name</span>
+                    <input id="job-callerName" type="text" placeholder="Jane Smith" />
+                  </label>
+                  <label>
+                    <span>Callback number</span>
+                    <input id="job-callbackNumber" type="text" placeholder="+1..." />
+                  </label>
+                  <label>
+                    <span>Service address</span>
+                    <input id="job-serviceAddress" type="text" placeholder="123 Main St" />
+                  </label>
+                  <label>
+                    <span>Location / area</span>
+                    <input id="job-locationArea" type="text" placeholder="NW Calgary" />
+                  </label>
+                  <label>
+                    <span>Issue type</span>
+                    <input id="job-issueType" type="text" placeholder="locksmith" />
+                  </label>
+                  <label>
+                    <span>Urgency</span>
+                    <input id="job-urgency" type="text" placeholder="emergency" />
+                  </label>
+                  <label class="wide">
+                    <span>Summary</span>
+                    <textarea id="job-summary" rows="4" placeholder="Front door lock jammed, customer locked out with child inside."></textarea>
+                  </label>
+                  <label class="wide">
+                    <span>Notes</span>
+                    <textarea id="job-notes" rows="4"></textarea>
+                  </label>
+                </div>
+                <div class="simulator-actions">
+                  <button id="create-job" class="button button-primary">Run test</button>
+                </div>
+                <pre id="job-result" class="code-block">Run a test job to preview the matched rule and contact batch.</pre>
+              </div>
+            </details>
           </div>
-          <div class="stack">
-            <label>
-              <span>Slack summary</span>
-              <textarea data-path="messageTemplates.slackSummary" rows="6"></textarea>
-            </label>
-            <label>
-              <span>Tech SMS</span>
-              <textarea data-path="messageTemplates.techSms" rows="5"></textarea>
-            </label>
-            <label>
-              <span>Partner SMS</span>
-              <textarea data-path="messageTemplates.partnerSms" rows="5"></textarea>
-            </label>
-            <label>
-              <span>Acceptance confirmation</span>
-              <textarea data-path="messageTemplates.acceptanceAck" rows="4"></textarea>
-            </label>
-            <p class="hint">Use tokens like <code>{{jobId}}</code>, <code>{{callerName}}</code>, <code>{{issueType}}</code>, and <code>{{summary}}</code>.</p>
-          </div>
-        </section>
+        </div>
 
-        <section class="panel span-12">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Roster</p>
-              <h2>Contacts</h2>
-            </div>
-            <button id="add-contact" class="button button-secondary">Add contact</button>
+        <div class="tab-panel" data-tab="contacts">
+          <p class="tab-desc">Techs and partners the system can dispatch to. Each contact needs a phone number and service area to be routable.</p>
+          <div class="tab-stack">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Roster</p>
+                  <h2>Contacts</h2>
+                </div>
+                <button id="add-contact" class="button button-secondary">Add contact</button>
+              </div>
+              <div id="contacts" class="card-grid"></div>
+            </section>
           </div>
-          <div id="contacts" class="card-grid"></div>
-        </section>
+        </div>
 
-        <section class="panel span-12">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Routing</p>
-              <h2>Rules and Combinations</h2>
-            </div>
-            <button id="add-rule" class="button button-secondary">Add rule</button>
-          </div>
-          <div id="routing-rules" class="stack"></div>
-        </section>
+        <div class="tab-panel" data-tab="routing">
+          <p class="tab-desc">How the agent handles calls. Fields define what it collects, templates define what it says, and rules decide who gets dispatched.</p>
+          <div class="tab-stack">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Intake</p>
+                  <h2>Caller Fields</h2>
+                </div>
+                <button id="add-field" class="button button-secondary">Add field</button>
+              </div>
+              <div id="intake-fields" class="stack"></div>
+            </section>
 
-        <section class="panel span-6">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Simulator</p>
-              <h2>Create Test Job</h2>
-            </div>
-            <button id="create-job" class="button button-primary">Run test</button>
-          </div>
-          <div class="form-grid">
-            <label>
-              <span>Caller name</span>
-              <input id="job-callerName" type="text" placeholder="Jane Smith" />
-            </label>
-            <label>
-              <span>Callback number</span>
-              <input id="job-callbackNumber" type="text" placeholder="+1..." />
-            </label>
-            <label>
-              <span>Service address</span>
-              <input id="job-serviceAddress" type="text" placeholder="123 Main St" />
-            </label>
-            <label>
-              <span>Location / area</span>
-              <input id="job-locationArea" type="text" placeholder="NW Calgary" />
-            </label>
-            <label>
-              <span>Issue type</span>
-              <input id="job-issueType" type="text" placeholder="locksmith" />
-            </label>
-            <label>
-              <span>Urgency</span>
-              <input id="job-urgency" type="text" placeholder="emergency" />
-            </label>
-            <label class="wide">
-              <span>Summary</span>
-              <textarea id="job-summary" rows="4" placeholder="Front door lock jammed, customer locked out with child inside."></textarea>
-            </label>
-            <label class="wide">
-              <span>Notes</span>
-              <textarea id="job-notes" rows="4"></textarea>
-            </label>
-          </div>
-          <pre id="job-result" class="code-block">Run a test job to preview the matched rule and contact batch.</pre>
-        </section>
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Messaging</p>
+                  <h2>Templates</h2>
+                </div>
+              </div>
+              <div class="stack">
+                <label>
+                  <span>Slack summary</span>
+                  <textarea data-path="messageTemplates.slackSummary" rows="6"></textarea>
+                </label>
+                <label>
+                  <span>Tech SMS</span>
+                  <textarea data-path="messageTemplates.techSms" rows="5"></textarea>
+                </label>
+                <label>
+                  <span>Partner SMS</span>
+                  <textarea data-path="messageTemplates.partnerSms" rows="5"></textarea>
+                </label>
+                <label>
+                  <span>Acceptance confirmation</span>
+                  <textarea data-path="messageTemplates.acceptanceAck" rows="4"></textarea>
+                </label>
+                <p class="hint">Use tokens like <code>{{jobId}}</code>, <code>{{callerName}}</code>, <code>{{issueType}}</code>, and <code>{{summary}}</code>.</p>
+              </div>
+            </section>
 
-        <section class="panel span-6">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Millis</p>
-              <h2>Function Endpoints</h2>
-            </div>
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Routing</p>
+                  <h2>Rules and Combinations</h2>
+                </div>
+                <button id="add-rule" class="button button-secondary">Add rule</button>
+              </div>
+              <div id="routing-rules" class="stack"></div>
+            </section>
           </div>
-          <div id="function-list" class="stack"></div>
-        </section>
+        </div>
 
-        <section class="panel span-12">
-          <div class="panel-header">
-            <div>
-              <p class="eyebrow">Jobs</p>
-              <h2>Recent Requests</h2>
-            </div>
+        <div class="tab-panel" data-tab="setup">
+          <p class="tab-desc">Your business identity and API connections. Set these once, then forget about them.</p>
+          <div class="tab-stack">
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Workspace</p>
+                  <h2>Business Info</h2>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Business name</span>
+                  <input data-path="workspace.businessName" type="text" />
+                </label>
+                <label>
+                  <span>Timezone</span>
+                  <input data-path="workspace.timezone" type="text" />
+                </label>
+                <label>
+                  <span>Business days</span>
+                  <input data-path="workspace.businessHours.daysCsv" type="text" placeholder="mon,tue,wed,thu,fri" />
+                </label>
+                <label>
+                  <span>Start hour</span>
+                  <input data-path="workspace.businessHours.startHour" type="number" min="0" max="23" />
+                </label>
+                <label>
+                  <span>End hour</span>
+                  <input data-path="workspace.businessHours.endHour" type="number" min="0" max="23" />
+                </label>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Slack</p>
+                  <h2>Notifications</h2>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label class="wide">
+                  <span>Webhook URL</span>
+                  <input data-path="slack.webhookUrl" type="text" placeholder="https://hooks.slack.com/..." />
+                </label>
+                <label>
+                  <span>Channel label</span>
+                  <input data-path="slack.channelLabel" type="text" placeholder="#dispatch" />
+                </label>
+                <label class="checkbox">
+                  <input data-path="slack.enabled" type="checkbox" />
+                  <span>Enable Slack sends from this dashboard</span>
+                </label>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Twilio</p>
+                  <h2>Voice and SMS</h2>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Voice number</span>
+                  <input data-path="twilio.voiceNumber" type="text" placeholder="+1..." />
+                </label>
+                <label>
+                  <span>SMS number</span>
+                  <input data-path="twilio.smsNumber" type="text" placeholder="+1..." />
+                </label>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Millis</p>
+                  <h2>AI Voice Agent</h2>
+                </div>
+              </div>
+              <div class="form-grid">
+                <label>
+                  <span>Intake agent ID</span>
+                  <input data-path="millis.intakeAgentId" type="text" />
+                </label>
+                <label>
+                  <span>Dispatch agent ID</span>
+                  <input data-path="millis.dispatchAgentId" type="text" />
+                </label>
+                <label class="wide">
+                  <span>API key</span>
+                  <input data-path="millis.apiKey" type="password" />
+                </label>
+              </div>
+            </section>
           </div>
-          <div id="jobs" class="stack"></div>
-        </section>
+        </div>
       </main>
     </div>
 

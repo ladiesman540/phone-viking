@@ -1,7 +1,7 @@
 const state = {
   config: null,
   jobs: [],
-  functions: []
+  activeTab: "jobs"
 };
 
 const elements = {
@@ -12,7 +12,6 @@ const elements = {
   contacts: document.querySelector("#contacts"),
   routingRules: document.querySelector("#routing-rules"),
   jobs: document.querySelector("#jobs"),
-  functionList: document.querySelector("#function-list"),
   jobResult: document.querySelector("#job-result")
 };
 
@@ -21,6 +20,17 @@ const templates = {
   contact: document.querySelector("#contact-template"),
   rule: document.querySelector("#rule-template")
 };
+
+function switchTab(tabName) {
+  state.activeTab = tabName;
+  document.querySelectorAll(".tab-button").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tabName);
+  });
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    panel.classList.toggle("active", panel.dataset.tab === tabName);
+  });
+  render();
+}
 
 function setSaveStatus(message, mode = "idle") {
   elements.saveStatus.textContent = message;
@@ -301,25 +311,6 @@ function renderRoutingRules() {
   elements.routingRules.replaceChildren(...state.config.routingRules.map(createRuleCard));
 }
 
-function renderFunctions() {
-  const items = state.functions.map((fn) => {
-    const article = document.createElement("article");
-    article.className = "function-card";
-    article.innerHTML = `
-      <div class="function-head">
-        <h3>${fn.name}</h3>
-        <span>${fn.method}</span>
-      </div>
-      <p>${fn.description}</p>
-      <code>${fn.url}</code>
-      <pre>${JSON.stringify(fn.parameters, null, 2)}</pre>
-    `;
-    return article;
-  });
-
-  elements.functionList.replaceChildren(...items);
-}
-
 function renderJobs() {
   if (!state.jobs.length) {
     elements.jobs.innerHTML = '<p class="hint">No jobs yet. Use the simulator or the Millis create_job function to create one.</p>';
@@ -355,24 +346,29 @@ function renderJobs() {
 }
 
 function render() {
-  bindRootInputs();
-  renderIntakeFields();
-  renderContacts();
-  renderRoutingRules();
-  renderFunctions();
-  renderJobs();
+  if (!state.config) return;
+  const tab = state.activeTab;
+  if (tab === "jobs") {
+    renderJobs();
+  } else if (tab === "contacts") {
+    renderContacts();
+  } else if (tab === "routing") {
+    bindRootInputs();
+    renderIntakeFields();
+    renderRoutingRules();
+  } else if (tab === "setup") {
+    bindRootInputs();
+  }
 }
 
 async function loadAll() {
-  const [config, jobs, functions] = await Promise.all([
+  const [config, jobs] = await Promise.all([
     fetchJson("/api/config"),
-    fetchJson("/api/jobs"),
-    fetchJson("/api/millis/function-definitions")
+    fetchJson("/api/jobs")
   ]);
 
   state.config = config;
   state.jobs = jobs;
-  state.functions = functions;
   render();
   setSaveStatus("Dashboard loaded.", "ok");
 }
@@ -460,6 +456,11 @@ async function createTestJob() {
 function wireActions() {
   elements.saveButton.onclick = () => saveConfig().catch((error) => setSaveStatus(error.message, "error"));
   elements.refreshButton.onclick = () => loadAll().catch((error) => setSaveStatus(error.message, "error"));
+
+  document.querySelectorAll(".tab-button").forEach((btn) => {
+    btn.onclick = () => switchTab(btn.dataset.tab);
+  });
+
   document.querySelector("#add-field").onclick = () => {
     state.config.intakeFields.push({
       id: `field_${state.config.intakeFields.length + 1}`,

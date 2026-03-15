@@ -56,7 +56,7 @@ body::before {
   justify-content: space-between;
   gap: 24px;
   align-items: flex-start;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   padding: 28px;
   border: 1px solid rgba(255, 255, 255, 0.42);
   border-radius: var(--radius-xl);
@@ -73,8 +73,7 @@ body::before {
 .panel h2,
 .contact-card h3,
 .rule-card h3,
-.job-card h3,
-.function-card h3 {
+.job-card h3 {
   margin: 0;
   font-weight: 700;
   letter-spacing: -0.03em;
@@ -84,12 +83,6 @@ body::before {
   font-size: clamp(2rem, 5vw, 3.4rem);
   line-height: 0.96;
   max-width: 11ch;
-}
-
-.hero-text {
-  max-width: 60ch;
-  font-size: 1.02rem;
-  color: var(--muted);
 }
 
 .eyebrow {
@@ -108,27 +101,66 @@ body::before {
   gap: 12px;
 }
 
-.layout-grid {
+/* Tab bar */
+
+.tab-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 20px;
+  padding: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  backdrop-filter: blur(10px);
+  width: fit-content;
+}
+
+.tab-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 22px;
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: transparent;
+  color: var(--muted);
+  transition: background 150ms ease, color 150ms ease, transform 120ms ease;
+}
+
+.tab-button:hover {
+  background: rgba(15, 23, 32, 0.06);
+  color: var(--ink);
+}
+
+.tab-button.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+  color: white;
+}
+
+/* Tab panels */
+
+.tab-desc {
+  margin: 0 0 16px;
+  font-size: 0.92rem;
+  color: var(--muted);
+  max-width: 60ch;
+}
+
+.tab-panel {
+  display: none;
+}
+
+.tab-panel.active {
+  display: block;
+}
+
+.tab-stack {
   display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
   gap: 20px;
 }
 
-.span-12 {
-  grid-column: span 12;
-}
-
-.span-7 {
-  grid-column: span 7;
-}
-
-.span-6 {
-  grid-column: span 6;
-}
-
-.span-5 {
-  grid-column: span 5;
-}
+/* Panels */
 
 .panel {
   border-radius: var(--radius-xl);
@@ -141,7 +173,6 @@ body::before {
 
 .panel-header,
 .contact-head,
-.function-head,
 .job-head {
   display: flex;
   justify-content: space-between;
@@ -267,8 +298,7 @@ textarea {
 .mini-card,
 .contact-card,
 .rule-card,
-.job-card,
-.function-card {
+.job-card {
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   padding: 16px;
@@ -277,8 +307,7 @@ textarea {
 
 .contact-card,
 .rule-card,
-.job-card,
-.function-card {
+.job-card {
   box-shadow: 0 10px 24px rgba(15, 23, 32, 0.05);
 }
 
@@ -311,7 +340,6 @@ textarea {
 .save-status,
 .hint,
 .job-meta,
-.function-head span,
 .job-head span {
   color: var(--muted);
 }
@@ -328,14 +356,11 @@ textarea {
   color: var(--accent-strong);
 }
 
-.code-block,
-.function-card code,
-.function-card pre {
+.code-block {
   font-family: var(--font-mono);
 }
 
-.code-block,
-.function-card pre {
+.code-block {
   overflow-x: auto;
   border-radius: 14px;
   padding: 14px;
@@ -343,22 +368,71 @@ textarea {
   color: #dbe8ff;
 }
 
-.function-card code {
-  display: block;
-  margin-bottom: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(15, 23, 32, 0.08);
-  color: var(--ink);
+/* Simulator details/summary */
+
+.simulator-details summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.simulator-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.simulator-details summary::marker {
+  display: none;
+  content: "";
+}
+
+.simulator-details summary h2::after {
+  content: " +";
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.simulator-details[open] summary h2::after {
+  content: " −";
+}
+
+.simulator-body {
+  margin-top: 16px;
+}
+
+.simulator-actions {
+  margin: 16px 0;
+}
+
+.clickable {
+  cursor: pointer;
+}
+
+/* Integrations details */
+
+details.panel > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.panel > summary::marker {
+  display: none;
+  content: "";
+}
+
+details.panel > summary h2::after {
+  content: " +";
+  font-weight: 400;
+  color: var(--muted);
+}
+
+details.panel[open] > summary h2::after {
+  content: " −";
 }
 
 @media (max-width: 1100px) {
-  .span-7,
-  .span-6,
-  .span-5 {
-    grid-column: span 12;
-  }
-
   .hero {
     flex-direction: column;
   }
@@ -375,7 +449,13 @@ textarea {
     border-radius: 22px;
   }
 
-  .layout-grid {
-    gap: 14px;
+  .tab-bar {
+    width: 100%;
+  }
+
+  .tab-button {
+    flex: 1;
+    text-align: center;
+    padding: 10px 14px;
   }
 }
