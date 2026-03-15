@@ -29,12 +29,15 @@
 
       <main>
         <div class="tab-panel active" data-tab="jobs">
-          <p class="tab-desc">Active and recent dispatch jobs. Expand the simulator at the bottom to fire a test.</p>
+          <div class="tab-intro">
+            <h2>Jobs</h2>
+            <p>Every time a caller reaches the system, a job gets created here. You can see who called, what they need, which routing rule matched, and whether a tech has accepted the job. This is your day-to-day view.</p>
+          </div>
           <div class="tab-stack">
             <section class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Jobs</p>
+                  <p class="eyebrow">Live</p>
                   <h2>Recent Requests</h2>
                 </div>
               </div>
@@ -44,11 +47,12 @@
             <details class="panel simulator-details">
               <summary class="panel-header clickable">
                 <div>
-                  <p class="eyebrow">Simulator</p>
-                  <h2>Create Test Job</h2>
+                  <p class="eyebrow">Testing</p>
+                  <h2>Simulate a Job</h2>
                 </div>
               </summary>
               <div class="simulator-body">
+                <p class="section-desc">Fake a call to test your setup. Fill in the fields below like a real caller would, hit "Run test," and the system will match a routing rule and show you which contacts would get dispatched. No real calls or texts go out.</p>
                 <div class="form-grid">
                   <label>
                     <span>Caller name</span>
@@ -93,105 +97,119 @@
         </div>
 
         <div class="tab-panel" data-tab="contacts">
-          <p class="tab-desc">Techs and partners the system can dispatch to. Each contact needs a phone number and service area to be routable.</p>
+          <div class="tab-intro">
+            <h2>Contacts</h2>
+            <p>These are the people the system can dispatch to when a job comes in. There are two types: <strong>techs</strong> (the people who actually show up and do the work) and <strong>partners</strong> (companies you subcontract to). When a routing rule fires, it picks from this list based on area, availability, and priority tier.</p>
+          </div>
           <div class="tab-stack">
             <section class="panel">
               <div class="panel-header">
                 <div>
                   <p class="eyebrow">Roster</p>
-                  <h2>Contacts</h2>
+                  <h2>All Contacts</h2>
                 </div>
                 <button id="add-contact" class="button button-secondary">Add contact</button>
               </div>
+              <p class="section-desc">Each contact needs at minimum a <strong>name</strong>, <strong>phone number</strong>, and at least one <strong>service area</strong> to be dispatchable. The priority tier controls who gets called first (tier 1 = first choice). Mark contacts inactive to temporarily remove them from dispatch without deleting them.</p>
               <div id="contacts" class="card-grid"></div>
             </section>
           </div>
         </div>
 
         <div class="tab-panel" data-tab="routing">
-          <p class="tab-desc">How the agent handles calls. Fields define what it collects, templates define what it says, and rules decide who gets dispatched.</p>
+          <div class="tab-intro">
+            <h2>Routing</h2>
+            <p>This is the brain of the dispatch system. It controls three things: what the AI agent asks the caller, what messages get sent out, and the rules that decide who gets called. Here's the flow: <strong>caller phones in → agent collects info using the fields below → system matches a routing rule → dispatches to the right contacts via call/SMS → posts a summary to Slack.</strong></p>
+          </div>
           <div class="tab-stack">
             <section class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Intake</p>
-                  <h2>Caller Fields</h2>
+                  <p class="eyebrow">Step 1</p>
+                  <h2>What the Agent Asks</h2>
                 </div>
                 <button id="add-field" class="button button-secondary">Add field</button>
               </div>
+              <p class="section-desc">These are the questions the AI phone agent asks the caller. Each field becomes a question in the conversation — things like "What's your name?", "What's the issue?", "What's the address?" The agent uses these answers to fill in the job and match a routing rule.</p>
               <div id="intake-fields" class="stack"></div>
             </section>
 
             <section class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Messaging</p>
-                  <h2>Templates</h2>
+                  <p class="eyebrow">Step 2</p>
+                  <h2>What Gets Sent Out</h2>
                 </div>
               </div>
+              <p class="section-desc">After a job is created, the system sends messages to your team and contacts. These templates control the exact wording. You can use tokens like <code>{{callerName}}</code> or <code>{{issueType}}</code> and they'll be replaced with the real values from the job.</p>
               <div class="stack">
                 <label>
-                  <span>Slack summary</span>
+                  <span>Slack summary — posted to your Slack channel when a new job comes in</span>
                   <textarea data-path="messageTemplates.slackSummary" rows="6"></textarea>
                 </label>
                 <label>
-                  <span>Tech SMS</span>
+                  <span>Tech SMS — text sent to techs when they're being dispatched</span>
                   <textarea data-path="messageTemplates.techSms" rows="5"></textarea>
                 </label>
                 <label>
-                  <span>Partner SMS</span>
+                  <span>Partner SMS — text sent to partner companies when they're being dispatched</span>
                   <textarea data-path="messageTemplates.partnerSms" rows="5"></textarea>
                 </label>
                 <label>
-                  <span>Acceptance confirmation</span>
+                  <span>Acceptance confirmation — sent back to the caller when a tech accepts the job</span>
                   <textarea data-path="messageTemplates.acceptanceAck" rows="4"></textarea>
                 </label>
-                <p class="hint">Use tokens like <code>{{jobId}}</code>, <code>{{callerName}}</code>, <code>{{issueType}}</code>, and <code>{{summary}}</code>.</p>
+                <p class="hint">Available tokens: <code>{{jobId}}</code>, <code>{{callerName}}</code>, <code>{{callbackNumber}}</code>, <code>{{serviceAddress}}</code>, <code>{{locationArea}}</code>, <code>{{issueType}}</code>, <code>{{urgency}}</code>, <code>{{summary}}</code></p>
               </div>
             </section>
 
             <section class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Routing</p>
-                  <h2>Rules and Combinations</h2>
+                  <p class="eyebrow">Step 3</p>
+                  <h2>Who Gets Called</h2>
                 </div>
                 <button id="add-rule" class="button button-secondary">Add rule</button>
               </div>
+              <p class="section-desc">Routing rules are if/then logic. Each rule says: "If the issue type is X, and the area is Y, and it's during Z hours — then call these contacts, in this order, with this escalation strategy." Rules are checked top to bottom by sort order. The first one that matches wins.</p>
               <div id="routing-rules" class="stack"></div>
             </section>
           </div>
         </div>
 
         <div class="tab-panel" data-tab="setup">
-          <p class="tab-desc">Your business identity and API connections. Set these once, then forget about them.</p>
+          <div class="tab-intro">
+            <h2>Setup</h2>
+            <p>Connect the services that make Phone Viking work. The system needs three things: <strong>Twilio</strong> to make phone calls and send texts, <strong>Millis</strong> to power the AI voice agent that answers calls, and <strong>Slack</strong> to notify your team. Set these up once and you shouldn't need to touch them again.</p>
+          </div>
           <div class="tab-stack">
             <section class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Workspace</p>
-                  <h2>Business Info</h2>
+                  <p class="eyebrow">Your Business</p>
+                  <h2>Workspace</h2>
                 </div>
               </div>
+              <p class="section-desc">Basic info about your business. The timezone and business hours are used by routing rules — you can create rules that only fire during business hours or only after hours.</p>
               <div class="form-grid">
                 <label>
                   <span>Business name</span>
                   <input data-path="workspace.businessName" type="text" />
                 </label>
                 <label>
-                  <span>Timezone</span>
+                  <span>Timezone — e.g. America/Edmonton</span>
                   <input data-path="workspace.timezone" type="text" />
                 </label>
                 <label>
-                  <span>Business days</span>
+                  <span>Business days — comma-separated</span>
                   <input data-path="workspace.businessHours.daysCsv" type="text" placeholder="mon,tue,wed,thu,fri" />
                 </label>
                 <label>
-                  <span>Start hour</span>
+                  <span>Start hour (24h) — e.g. 8 for 8 AM</span>
                   <input data-path="workspace.businessHours.startHour" type="number" min="0" max="23" />
                 </label>
                 <label>
-                  <span>End hour</span>
+                  <span>End hour (24h) — e.g. 17 for 5 PM</span>
                   <input data-path="workspace.businessHours.endHour" type="number" min="0" max="23" />
                 </label>
               </div>
@@ -200,40 +218,18 @@
             <section class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Slack</p>
-                  <h2>Notifications</h2>
-                </div>
-              </div>
-              <div class="form-grid">
-                <label class="wide">
-                  <span>Webhook URL</span>
-                  <input data-path="slack.webhookUrl" type="text" placeholder="https://hooks.slack.com/..." />
-                </label>
-                <label>
-                  <span>Channel label</span>
-                  <input data-path="slack.channelLabel" type="text" placeholder="#dispatch" />
-                </label>
-                <label class="checkbox">
-                  <input data-path="slack.enabled" type="checkbox" />
-                  <span>Enable Slack sends from this dashboard</span>
-                </label>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-header">
-                <div>
                   <p class="eyebrow">Twilio</p>
-                  <h2>Voice and SMS</h2>
+                  <h2>Phone Calls and Texts</h2>
                 </div>
               </div>
+              <p class="section-desc">Twilio is how the system makes outbound calls to techs and sends SMS messages. You need two phone numbers from your Twilio account — one for voice calls, one for texts (they can be the same number). Your Twilio Account SID and Auth Token are read from environment variables (<code>TWILIO_ACCOUNT_SID</code> and <code>TWILIO_AUTH_TOKEN</code>) — they don't go here.</p>
               <div class="form-grid">
                 <label>
-                  <span>Voice number</span>
+                  <span>Voice number — the Twilio number that makes outbound calls to techs</span>
                   <input data-path="twilio.voiceNumber" type="text" placeholder="+1..." />
                 </label>
                 <label>
-                  <span>SMS number</span>
+                  <span>SMS number — the Twilio number that sends dispatch texts</span>
                   <input data-path="twilio.smsNumber" type="text" placeholder="+1..." />
                 </label>
               </div>
@@ -242,22 +238,47 @@
             <section class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Millis</p>
-                  <h2>AI Voice Agent</h2>
+                  <p class="eyebrow">Millis AI</p>
+                  <h2>Voice Agent</h2>
                 </div>
               </div>
+              <p class="section-desc">Millis powers the AI agent that answers incoming calls, talks to the caller, and collects the info needed to create a job. You need two agents configured in Millis: an <strong>intake agent</strong> (answers the phone, asks questions) and a <strong>dispatch agent</strong> (calls techs to offer them the job). The API key authenticates with Millis — get it from your Millis dashboard.</p>
               <div class="form-grid">
                 <label>
-                  <span>Intake agent ID</span>
+                  <span>Intake agent ID — the agent that answers incoming calls</span>
                   <input data-path="millis.intakeAgentId" type="text" />
                 </label>
                 <label>
-                  <span>Dispatch agent ID</span>
+                  <span>Dispatch agent ID — the agent that calls techs to offer jobs</span>
                   <input data-path="millis.dispatchAgentId" type="text" />
                 </label>
                 <label class="wide">
-                  <span>API key</span>
+                  <span>API key — from your Millis dashboard</span>
                   <input data-path="millis.apiKey" type="password" />
+                </label>
+              </div>
+            </section>
+
+            <section class="panel">
+              <div class="panel-header">
+                <div>
+                  <p class="eyebrow">Slack</p>
+                  <h2>Team Notifications</h2>
+                </div>
+              </div>
+              <p class="section-desc">When a new job comes in, the system posts a summary to a Slack channel so your team can see it in real time. Create an <strong>Incoming Webhook</strong> in your Slack workspace settings and paste the URL here.</p>
+              <div class="form-grid">
+                <label class="wide">
+                  <span>Webhook URL — from Slack > Apps > Incoming Webhooks</span>
+                  <input data-path="slack.webhookUrl" type="text" placeholder="https://hooks.slack.com/..." />
+                </label>
+                <label>
+                  <span>Channel label — just for display, e.g. #dispatch</span>
+                  <input data-path="slack.channelLabel" type="text" placeholder="#dispatch" />
+                </label>
+                <label class="checkbox">
+                  <input data-path="slack.enabled" type="checkbox" />
+                  <span>Enable Slack notifications</span>
                 </label>
               </div>
             </section>
