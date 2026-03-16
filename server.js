@@ -824,10 +824,8 @@ async function handleApi(req, res, pathname) {
 
     return sendJson(res, 201, {
       success: true,
-      job,
-      batch,
-      slack: slackResult,
-      dispatched: dispatchResults
+      message: `Job ${job.id} created. ${batch.contacts.length} contact(s) being dispatched.`,
+      jobId: job.id
     });
   }
 
