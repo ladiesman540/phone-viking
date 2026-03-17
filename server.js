@@ -516,11 +516,13 @@ async function sendTwilioSms(config, to, body) {
   return { skipped: false, ok: response.ok, status: response.status, sid: result.sid, error: result.message };
 }
 
-async function startMillisOutboundCall(config, toPhone, jobId, contactId, contactName) {
+async function startMillisOutboundCall(config, toPhone, job, contactId, contactName) {
   const { apiKey, dispatchAgentId, baseUrl } = config.millis || {};
   if (!apiKey || !dispatchAgentId) {
     return { skipped: true, reason: "Millis dispatch agent not configured." };
   }
+
+  const fromPhone = normalizeString(config.millis?.outboundNumber);
 
   const response = await fetch(`${baseUrl || "https://api-west.millis.ai"}/start_outbound_call`, {
     method: "POST",
@@ -530,8 +532,19 @@ async function startMillisOutboundCall(config, toPhone, jobId, contactId, contac
     },
     body: JSON.stringify({
       agent_id: dispatchAgentId,
+      from_phone: fromPhone || undefined,
       to_phone: toPhone,
-      metadata: { jobId, contactId, contactName },
+      metadata: {
+        jobId: job.id,
+        contactId,
+        techName: contactName,
+        issueType: job.issueType,
+        jobAddress: job.serviceAddress,
+        summary: job.summary,
+        callerName: job.callerName,
+        callbackNumber: job.callbackNumber,
+        notes: job.notes
+      },
       include_metadata_in_prompt: true
     })
   });
@@ -563,7 +576,7 @@ async function dispatchBatch(job, batch, config) {
     }
 
     // Start outbound call via Millis
-    const callResult = await startMillisOutboundCall(config, phone, job.id, contact.id, contact.name);
+    const callResult = await startMillisOutboundCall(config, phone, job, contact.id, contact.name);
     if (!callResult.skipped) {
       const attempt = {
         id: `attempt_${randomUUID()}`,
@@ -921,7 +934,7 @@ async function handleApi(req, res, pathname) {
     const isDecline = ["no", "n", "decline", "pass"].includes(smsBody);
 
     // Find the contact by phone number
-    const contact = (config.contacts || []).find((c) => normalizeString(c.phone) === from);
+    const contact = (config.contacts || []).find((c) => normalizeString(c.phone) === from || normalizeString(c.smsPhone) === from);
     if (!contact) {
       res.writeHead(200, { "Content-Type": "text/xml" });
       return res.end("<Response><Message>Unknown number. Contact dispatch directly.</Message></Response>");
