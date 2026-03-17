@@ -191,6 +191,11 @@ async function parseBody(req) {
     return Object.fromEntries(new URLSearchParams(raw).entries());
   }
 
+  // Try parsing as JSON even without the header (Millis may not send Content-Type)
+  try {
+    return JSON.parse(raw);
+  } catch {}
+
   return { raw };
 }
 
