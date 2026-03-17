@@ -1,0 +1,177 @@
+{
+  "workspace": {
+    "businessName": "Viking Refrigeration",
+    "timezone": "America/Edmonton",
+    "businessHours": {
+      "days": [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri"
+      ],
+      "startHour": 8,
+      "endHour": 17
+    }
+  },
+  "slack": {
+    "enabled": true,
+    "webhookUrl": "",
+    "channelLabel": "#dispatch"
+  },
+  "twilio": {
+    "voiceNumber": "+15878096383",
+    "smsNumber": "+15878096383",
+    "accountSid": "",
+    "authToken": ""
+  },
+  "millis": {
+    "apiKey": "",
+    "publicKey": "",
+    "intakeAgentId": "-Oni4tDdIrhvby82tA4L",
+    "dispatchAgentId": "-OnrsTYAR6nHM7WaIYip",
+    "baseUrl": "https://api-west.millis.ai",
+    "outboundNumber": "+15878753851"
+  },
+  "intakeFields": [
+    {
+      "id": "caller_name",
+      "label": "Caller name",
+      "type": "text",
+      "required": true,
+      "helpText": "Who is calling?"
+    },
+    {
+      "id": "callback_number",
+      "label": "Callback number",
+      "type": "phone",
+      "required": true,
+      "helpText": "Best number for the tech to reach them back."
+    },
+    {
+      "id": "service_address",
+      "label": "Service address",
+      "type": "text",
+      "required": true,
+      "helpText": "Where the work needs to happen."
+    },
+    {
+      "id": "location_area",
+      "label": "Area",
+      "type": "text",
+      "required": false,
+      "helpText": "Neighbourhood or area of Fort McMurray."
+    },
+    {
+      "id": "issue_type",
+      "label": "Issue type",
+      "type": "select",
+      "required": true,
+      "helpText": "hvac, plumbing, or gas"
+    },
+    {
+      "id": "urgency",
+      "label": "Urgency",
+      "type": "select",
+      "required": true,
+      "helpText": "emergency or routine"
+    },
+    {
+      "id": "summary",
+      "label": "Summary",
+      "type": "textarea",
+      "required": true,
+      "helpText": "What is happening — furnace out, pipes burst, etc."
+    },
+    {
+      "id": "notes",
+      "label": "Notes",
+      "type": "textarea",
+      "required": false,
+      "helpText": "Dogs, locked gate, which door — anything the tech should know."
+    }
+  ],
+  "messageTemplates": {
+    "slackSummary": "*New dispatch request*\nCustomer: {{callerName}}\nCallback: {{callbackNumber}}\nLocation: {{locationArea}}\nIssue: {{issueType}}\nUrgency: {{urgency}}\nSummary: {{summary}}\nJob ID: {{jobId}}",
+    "techSms": "Dispatch request {{jobId}}: {{issueType}} at {{locationArea}}. {{summary}} Reply YES if you can take it, NO if not.",
+    "partnerSms": "Partner request {{jobId}}: {{issueType}} at {{locationArea}}. {{summary}} Reply YES if available.",
+    "acceptanceAck": "Confirmed. {{contactName}} has accepted job {{jobId}}."
+  },
+  "contacts": [
+    {
+      "id": "contact_test_tech",
+      "name": "Test Tech",
+      "company": "Phone Viking QA",
+      "type": "tech",
+      "priorityTier": 1,
+      "phone": "+17807163624",
+      "smsPhone": "+17807163624",
+      "serviceAreas": [],
+      "availability": "24/7",
+      "notes": "Test contact for simulation",
+      "active": true
+    }
+  ],
+  "routingRules": [
+    {
+      "id": "rule_afterhours_emergency",
+      "name": "After-hours emergency",
+      "active": true,
+      "sortOrder": 1,
+      "conditions": {
+        "issueTypes": [
+          "hvac",
+          "plumbing",
+          "gas"
+        ],
+        "urgencies": [
+          "emergency"
+        ],
+        "areas": [],
+        "scheduleMode": "after-hours",
+        "contactTypes": [
+          "tech"
+        ]
+      },
+      "strategy": {
+        "initialTier": 1,
+        "batchSize": 1,
+        "escalateAfterMinutes": 5,
+        "leaveVoicemail": false,
+        "sendSms": true,
+        "notifySlackOnEscalation": true
+      },
+      "targetContactIds": [
+        "contact_test_tech"
+      ]
+    },
+    {
+      "id": "rule_anytime_emergency",
+      "name": "Emergency fallback (any time)",
+      "active": true,
+      "sortOrder": 2,
+      "conditions": {
+        "issueTypes": [],
+        "urgencies": [
+          "emergency"
+        ],
+        "areas": [],
+        "scheduleMode": "any",
+        "contactTypes": [
+          "tech"
+        ]
+      },
+      "strategy": {
+        "initialTier": 1,
+        "batchSize": 1,
+        "escalateAfterMinutes": 5,
+        "leaveVoicemail": false,
+        "sendSms": true,
+        "notifySlackOnEscalation": true
+      },
+      "targetContactIds": [
+        "contact_test_tech"
+      ]
+    }
+  ]
+}

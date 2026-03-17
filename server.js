@@ -684,6 +684,12 @@ async function saveConfig(config) {
 
 async function loadConfig() {
   const current = await readJson(CONFIG_FILE, clone(defaultConfig));
+  // Overlay secrets from env vars (so config.json can be committed without creds)
+  if (process.env.SLACK_WEBHOOK_URL) current.slack = { ...current.slack, webhookUrl: process.env.SLACK_WEBHOOK_URL };
+  if (process.env.TWILIO_ACCOUNT_SID) current.twilio = { ...current.twilio, accountSid: process.env.TWILIO_ACCOUNT_SID };
+  if (process.env.TWILIO_AUTH_TOKEN) current.twilio = { ...current.twilio, authToken: process.env.TWILIO_AUTH_TOKEN };
+  if (process.env.MILLIS_API_KEY) current.millis = { ...current.millis, apiKey: process.env.MILLIS_API_KEY };
+  if (process.env.MILLIS_PUBLIC_KEY) current.millis = { ...current.millis, publicKey: process.env.MILLIS_PUBLIC_KEY };
   return saveConfig(current);
 }
 
