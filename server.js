@@ -846,7 +846,7 @@ async function handleApi(req, res, pathname) {
       }
     }
 
-    return sendJson(res, 201, {
+    return sendJson(res, 200, {
       success: true,
       message: `Job ${job.id} created. ${batch.contacts.length} contact(s) being dispatched.`,
       jobId: job.id
