@@ -604,6 +604,47 @@ async function startVapiOutboundCall(config, toPhone, job, contactId, contactNam
   return { skipped: false, ok: response.ok, status: response.status, callId: result.id, error: result.message || result.error || null };
 }
 
+async function callCustomerUpdate(config, job, updateType, techName, etaMinutes) {
+  const { apiKey, phoneNumberId, baseUrl } = config.vapi || {};
+  if (!apiKey) return { skipped: true, reason: "Vapi not configured." };
+
+  const customerPhone = normalizeString(job.callbackNumber);
+  if (!customerPhone) return { skipped: true, reason: "No callback number." };
+
+  let firstMessage, systemPrompt;
+  if (updateType === "accepted") {
+    const eta = etaMinutes ? ` They should be there in about ${etaMinutes} minutes.` : "";
+    firstMessage = `Hi ${job.callerName || "there"}, this is Viking Refrigeration calling back about your ${job.issueType || "service"} emergency. Good news — we've got a tech heading your way.${eta} They'll call you when they're close. Is there anything else you need before they arrive?`;
+    systemPrompt = `You are a callback agent for Viking Refrigeration. You just informed the customer that a tech has been dispatched. Answer any simple questions briefly. If they ask about pricing, say the tech can discuss that on site. If they ask for an ETA, say approximately ${etaMinutes || "30 to 45"} minutes. Keep it short and friendly. Once they confirm they're good, say "Great, sit tight and the tech will be there soon. Have a good night." and end the call.`;
+  } else {
+    firstMessage = `Hi ${job.callerName || "there"}, this is Viking Refrigeration calling back about your ${job.issueType || "service"} request. Unfortunately we weren't able to reach any of our on-call techs tonight. If this is still urgent, you can call our direct line at 587-809-6383. We really apologize for the inconvenience.`;
+    systemPrompt = `You are a callback agent for Viking Refrigeration. You just informed the customer that no technician is available tonight. Be empathetic and apologetic. If they're upset, acknowledge it. Remind them they can call 587-809-6383 for the direct line, or call back when the office opens at 8 AM. Keep it brief. Once they acknowledge, say "Again, we're sorry about this. Stay safe tonight." and end the call.`;
+  }
+
+  const response = await fetch(`${baseUrl || "https://api.vapi.ai"}/call`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      assistant: {
+        model: { provider: "openai", model: "gpt-4o-mini" },
+        voice: { provider: "11labs", voiceId: "21m00Tcm4TlvDq8ikWAM" },
+        firstMessage,
+        systemPrompt
+      },
+      phoneNumberId: phoneNumberId || undefined,
+      customer: { number: customerPhone }
+    })
+  });
+
+  const text = await response.text();
+  let result;
+  try { result = JSON.parse(text); } catch { result = { raw: text }; }
+  return { skipped: false, ok: response.ok, status: response.status, callId: result.id, error: result.message || result.error || null };
+}
+
 async function dispatchBatch(job, batch, config) {
   const results = [];
   for (const contact of batch.contacts) {
@@ -663,6 +704,9 @@ function scheduleEscalation(jobId, delayMinutes, config) {
         if (batch.strategy.notifySlackOnEscalation) {
           await sendSlackMessage(currentConfig, `*Escalation exhausted* for job ${job.id} — no more contacts available.`);
         }
+        // Call the customer to let them know no tech is available
+        const customerCallResult = await callCustomerUpdate(currentConfig, job, "unavailable");
+        appendTimeline(job, "customer-callback", { type: "unavailable", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
         await saveJobs(jobs);
         return;
       }
@@ -927,6 +971,7 @@ async function handleApi(req, res, pathname) {
     }
 
     if (args.status === "declined") {
+      const declinedContact = (config.contacts || []).find((item) => item.id === args.contactId);
       const attempt = {
         id: `attempt_${randomUUID()}`,
         at: new Date().toISOString(),
@@ -938,7 +983,24 @@ async function handleApi(req, res, pathname) {
       job.attempts.push(attempt);
       job.updatedAt = new Date().toISOString();
       appendTimeline(job, "job-declined", attempt);
+
+      // Notify Slack that tech declined
+      try {
+        await sendSlackMessage(config, `*Tech declined* — ${declinedContact?.name || args.contactId} declined job ${job.id} (${job.issueType} at ${job.locationArea}).`);
+      } catch {}
+
       const batch = buildDispatchBatch(job, config);
+
+      // If no more contacts to try, call customer immediately
+      if (!batch.contacts.length) {
+        appendTimeline(job, "escalation-exhausted", { message: "No more contacts available." });
+        try {
+          await sendSlackMessage(config, `*Escalation exhausted* for job ${job.id} — no techs available. Calling customer.`);
+        } catch {}
+        const customerCallResult = await callCustomerUpdate(config, job, "unavailable");
+        appendTimeline(job, "customer-callback", { type: "unavailable", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
+      }
+
       await saveJobs(jobs);
 
       const result = { success: true, status: "declined" };
@@ -963,6 +1025,10 @@ async function handleApi(req, res, pathname) {
 
     const acknowledgement = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(job, contact));
     try { await sendSlackMessage(config, acknowledgement); } catch {}
+
+    // Call the customer to let them know a tech is on the way
+    const customerCallResult = await callCustomerUpdate(config, job, "accepted", contact?.name || "a technician", args.etaMinutes);
+    appendTimeline(job, "customer-callback", { type: "accepted", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
     await saveJobs(jobs);
 
     const result = { success: true, status: "accepted" };
