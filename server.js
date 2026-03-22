@@ -103,29 +103,65 @@ const defaultConfig = {
     acceptanceAck:
       "Confirmed. {{contactName}} has accepted job {{jobId}}."
   },
-  contacts: [],
+  contacts: [
+    {
+      id: "contact_test_tech",
+      name: "Test Tech",
+      company: "Phone Viking QA",
+      type: "tech",
+      priorityTier: 1,
+      phone: "+17807163624",
+      smsPhone: "+17807163624",
+      serviceAreas: [],
+      availability: "24/7",
+      notes: "Test contact for simulation",
+      active: true
+    }
+  ],
   routingRules: [
     {
-      id: "rule_emergency_default",
-      name: "Emergency default",
+      id: "rule_afterhours_emergency",
+      name: "After-hours emergency",
       active: true,
       sortOrder: 1,
       conditions: {
-        issueTypes: [],
+        issueTypes: ["hvac", "plumbing", "gas"],
         urgencies: ["emergency"],
         areas: [],
-        scheduleMode: "any",
-        contactTypes: ["tech", "partner"]
+        scheduleMode: "after-hours",
+        contactTypes: ["tech"]
       },
       strategy: {
         initialTier: 1,
-        batchSize: 3,
+        batchSize: 1,
         escalateAfterMinutes: 5,
         leaveVoicemail: false,
         sendSms: true,
         notifySlackOnEscalation: true
       },
-      targetContactIds: []
+      targetContactIds: ["contact_test_tech"]
+    },
+    {
+      id: "rule_anytime_emergency",
+      name: "Emergency fallback (any time)",
+      active: true,
+      sortOrder: 2,
+      conditions: {
+        issueTypes: [],
+        urgencies: ["emergency"],
+        areas: [],
+        scheduleMode: "any",
+        contactTypes: ["tech"]
+      },
+      strategy: {
+        initialTier: 1,
+        batchSize: 1,
+        escalateAfterMinutes: 5,
+        leaveVoicemail: false,
+        sendSms: true,
+        notifySlackOnEscalation: true
+      },
+      targetContactIds: ["contact_test_tech"]
     }
   ]
 };
