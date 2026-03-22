@@ -33,6 +33,12 @@
     "baseUrl": "https://api-west.millis.ai",
     "outboundNumber": "+15878753851"
   },
+  "vapi": {
+    "apiKey": "",
+    "dispatchAssistantId": "0d5390f4-bd9e-46b6-9770-517f9b117cf6",
+    "phoneNumberId": "da19fba6-7009-4f12-8271-b45815b9d697",
+    "baseUrl": "https://api.vapi.ai"
+  },
   "intakeFields": [
     {
       "id": "caller_name",

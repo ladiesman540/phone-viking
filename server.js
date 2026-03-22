@@ -43,6 +43,12 @@ const defaultConfig = {
     dispatchAgentId: process.env.MILLIS_AGENT_ID || "",
     baseUrl: "https://api-west.millis.ai"
   },
+  vapi: {
+    apiKey: process.env.VAPI_API_KEY || "",
+    dispatchAssistantId: process.env.VAPI_DISPATCH_ASSISTANT_ID || "",
+    phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID || "",
+    baseUrl: "https://api.vapi.ai"
+  },
   intakeFields: [
     {
       id: "caller_name",
@@ -558,6 +564,46 @@ async function startMillisOutboundCall(config, toPhone, job, contactId, contactN
   return { skipped: false, ok: response.ok, status: response.status, callId: result.call_id, sessionId: result.session_id };
 }
 
+async function startVapiOutboundCall(config, toPhone, job, contactId, contactName) {
+  const { apiKey, dispatchAssistantId, phoneNumberId, baseUrl } = config.vapi || {};
+  if (!apiKey || !dispatchAssistantId) {
+    return { skipped: true, reason: "Vapi dispatch agent not configured." };
+  }
+
+  const response = await fetch(`${baseUrl || "https://api.vapi.ai"}/call`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      assistantId: dispatchAssistantId,
+      assistantOverrides: {
+        variableValues: {
+          jobId: job.id,
+          contactId,
+          techName: contactName,
+          issueType: job.issueType,
+          jobAddress: job.serviceAddress,
+          summary: job.summary,
+          callerName: job.callerName,
+          callbackNumber: job.callbackNumber,
+          notes: job.notes || ""
+        }
+      },
+      phoneNumberId: phoneNumberId || undefined,
+      customer: {
+        number: toPhone
+      }
+    })
+  });
+
+  const text = await response.text();
+  let result;
+  try { result = JSON.parse(text); } catch { result = { raw: text }; }
+  return { skipped: false, ok: response.ok, status: response.status, callId: result.id, error: result.message || result.error || null };
+}
+
 async function dispatchBatch(job, batch, config) {
   const results = [];
   for (const contact of batch.contacts) {
@@ -580,8 +626,10 @@ async function dispatchBatch(job, batch, config) {
       results.push({ contactId: contact.id, channel: "sms", result: smsResult });
     }
 
-    // Start outbound call via Millis
-    const callResult = await startMillisOutboundCall(config, phone, job, contact.id, contact.name);
+    // Start outbound call via Vapi (fallback to Millis if Vapi not configured)
+    const callResult = (config.vapi?.apiKey && config.vapi?.dispatchAssistantId)
+      ? await startVapiOutboundCall(config, phone, job, contact.id, contact.name)
+      : await startMillisOutboundCall(config, phone, job, contact.id, contact.name);
     if (!callResult.skipped) {
       const attempt = {
         id: `attempt_${randomUUID()}`,
@@ -589,10 +637,10 @@ async function dispatchBatch(job, batch, config) {
         contactId: contact.id,
         channel: "call",
         status: callResult.ok ? "ringing" : "failed",
-        notes: ""
+        notes: callResult.error || ""
       };
       job.attempts.push(attempt);
-      appendTimeline(job, "attempt-logged", { ...attempt, millisCallId: callResult.callId });
+      appendTimeline(job, "attempt-logged", { ...attempt, vapiCallId: callResult.callId, vapiError: callResult.error });
       results.push({ contactId: contact.id, channel: "call", result: callResult });
     }
   }
@@ -669,6 +717,10 @@ async function saveConfig(config) {
       ...clone(defaultConfig.millis),
       ...(config.millis || {})
     },
+    vapi: {
+      ...clone(defaultConfig.vapi),
+      ...(config.vapi || {})
+    },
     intakeFields: Array.isArray(config.intakeFields) ? config.intakeFields : clone(defaultConfig.intakeFields),
     contacts: Array.isArray(config.contacts) ? config.contacts : [],
     routingRules: Array.isArray(config.routingRules) ? config.routingRules : clone(defaultConfig.routingRules),
@@ -690,6 +742,9 @@ async function loadConfig() {
   if (process.env.TWILIO_AUTH_TOKEN) current.twilio = { ...current.twilio, authToken: process.env.TWILIO_AUTH_TOKEN };
   if (process.env.MILLIS_API_KEY) current.millis = { ...current.millis, apiKey: process.env.MILLIS_API_KEY };
   if (process.env.MILLIS_PUBLIC_KEY) current.millis = { ...current.millis, publicKey: process.env.MILLIS_PUBLIC_KEY };
+  if (process.env.VAPI_API_KEY) current.vapi = { ...current.vapi, apiKey: process.env.VAPI_API_KEY };
+  if (process.env.VAPI_DISPATCH_ASSISTANT_ID) current.vapi = { ...current.vapi, dispatchAssistantId: process.env.VAPI_DISPATCH_ASSISTANT_ID };
+  if (process.env.VAPI_PHONE_NUMBER_ID) current.vapi = { ...current.vapi, phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID };
   return saveConfig(current);
 }
 
@@ -810,6 +865,112 @@ async function handleApi(req, res, pathname) {
     await saveJobs(jobs);
     return sendJson(res, 201, { job, batch });
   }
+
+  // --- Vapi tool-call webhooks ---
+  // Vapi sends: { message: { type: "tool-calls", toolCallList: [{ id, name, arguments }] } }
+  // We must respond: { results: [{ toolCallId, result }] }
+
+  if (req.method === "POST" && pathname === "/api/vapi/create-job") {
+    const body = await parseBody(req);
+    const toolCall = body.message?.toolCallList?.[0];
+    const args = toolCall?.arguments || body;
+
+    const job = createJobFromPayload(args, config);
+    const batch = buildDispatchBatch(job, config);
+    const slackText = renderTemplate(config.messageTemplates?.slackSummary, getTemplateValues(job));
+    jobs.push(job);
+    appendTimeline(job, "initial-batch-generated", {
+      tier: batch.tier,
+      contactIds: batch.contacts.map((contact) => contact.id)
+    });
+    await saveJobs(jobs);
+
+    let slackResult = { skipped: true, reason: "Not attempted." };
+    try {
+      slackResult = await sendSlackMessage(config, slackText);
+      appendTimeline(job, "slack-summary", slackResult);
+      await saveJobs(jobs);
+    } catch (error) {
+      appendTimeline(job, "slack-summary-failed", { message: error.message });
+      await saveJobs(jobs);
+    }
+
+    let dispatchResults = [];
+    if (batch.contacts.length) {
+      dispatchResults = await dispatchBatch(job, batch, config);
+      await saveJobs(jobs);
+      if (batch.strategy.escalateAfterMinutes > 0) {
+        scheduleEscalation(job.id, batch.strategy.escalateAfterMinutes, config);
+      }
+    }
+
+    const resultMessage = `Job ${job.id} created. ${batch.contacts.length} contact(s) being dispatched.`;
+
+    if (toolCall?.id) {
+      return sendJson(res, 200, {
+        results: [{ toolCallId: toolCall.id, result: JSON.stringify({ success: true, message: resultMessage, jobId: job.id }) }]
+      });
+    }
+    return sendJson(res, 200, { success: true, message: resultMessage, jobId: job.id });
+  }
+
+  if (req.method === "POST" && pathname === "/api/vapi/accept-job") {
+    const body = await parseBody(req);
+    const toolCall = body.message?.toolCallList?.[0];
+    const args = toolCall?.arguments || body;
+
+    const job = jobs.find((item) => item.id === args.jobId);
+    if (!job) {
+      const err = { error: "Job not found." };
+      if (toolCall?.id) return sendJson(res, 200, { results: [{ toolCallId: toolCall.id, result: JSON.stringify(err) }] });
+      return sendJson(res, 404, err);
+    }
+
+    if (args.status === "declined") {
+      const attempt = {
+        id: `attempt_${randomUUID()}`,
+        at: new Date().toISOString(),
+        contactId: normalizeString(args.contactId),
+        channel: "call",
+        status: "declined",
+        notes: normalizeString(args.notes)
+      };
+      job.attempts.push(attempt);
+      job.updatedAt = new Date().toISOString();
+      appendTimeline(job, "job-declined", attempt);
+      const batch = buildDispatchBatch(job, config);
+      await saveJobs(jobs);
+
+      const result = { success: true, status: "declined" };
+      if (toolCall?.id) return sendJson(res, 200, { results: [{ toolCallId: toolCall.id, result: JSON.stringify(result) }] });
+      return sendJson(res, 200, result);
+    }
+
+    // accepted
+    const contact = (config.contacts || []).find((item) => item.id === args.contactId);
+    job.status = "accepted";
+    job.updatedAt = new Date().toISOString();
+    job.acceptedBy = {
+      contactId: normalizeString(args.contactId),
+      contactName: contact?.name || "",
+      channel: "call",
+      at: new Date().toISOString(),
+      etaMinutes: args.etaMinutes || null,
+      notes: normalizeString(args.notes)
+    };
+    appendTimeline(job, "job-accepted", job.acceptedBy);
+    clearEscalation(job.id);
+
+    const acknowledgement = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(job, contact));
+    try { await sendSlackMessage(config, acknowledgement); } catch {}
+    await saveJobs(jobs);
+
+    const result = { success: true, status: "accepted" };
+    if (toolCall?.id) return sendJson(res, 200, { results: [{ toolCallId: toolCall.id, result: JSON.stringify(result) }] });
+    return sendJson(res, 200, result);
+  }
+
+  // --- Millis endpoints (kept for backward compatibility) ---
 
   if (req.method === "POST" && pathname === "/api/millis/create-job") {
     const body = await parseBody(req);
