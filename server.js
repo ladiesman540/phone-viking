@@ -666,10 +666,13 @@ async function callCustomerUpdate(config, job, updateType, techName, etaMinutes)
     },
     body: JSON.stringify({
       assistant: {
-        model: { provider: "openai", model: "gpt-4o-mini" },
+        model: {
+          provider: "openai",
+          model: "gpt-4o-mini",
+          messages: [{ role: "system", content: systemPrompt }]
+        },
         voice: { provider: "11labs", voiceId: "21m00Tcm4TlvDq8ikWAM" },
-        firstMessage,
-        systemPrompt
+        firstMessage
       },
       phoneNumberId: phoneNumberId || undefined,
       customer: { number: customerPhone }
