@@ -3,14 +3,17 @@ const fs = require("fs/promises");
 const path = require("path");
 const { randomUUID } = require("crypto");
 const { URL } = require("url");
+const { neon } = require("@neondatabase/serverless");
 
 const ROOT = __dirname;
-const IS_VERCEL = process.env.VERCEL === "1";
-const DATA_DIR = IS_VERCEL ? "/tmp/data" : path.join(ROOT, "data");
+const DATA_DIR = path.join(ROOT, "data");
 const PUBLIC_DIR = path.join(ROOT, "public");
-const CONFIG_FILE = path.join(DATA_DIR, "config.json");
-const JOBS_FILE = path.join(DATA_DIR, "jobs.json");
 const PORT = Number(process.env.PORT || 3007);
+
+function getDb() {
+  if (!process.env.DATABASE_URL) return null;
+  return neon(process.env.DATABASE_URL);
+}
 
 // Active escalation timers keyed by jobId
 const escalationTimers = new Map();
@@ -175,31 +178,8 @@ const mimeTypes = {
 };
 
 async function ensureDataFiles() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.mkdir(PUBLIC_DIR, { recursive: true });
-  await ensureFile(CONFIG_FILE, defaultConfig);
-  await ensureFile(JOBS_FILE, []);
-}
-
-async function ensureFile(filePath, fallbackValue) {
-  try {
-    await fs.access(filePath);
-  } catch {
-    await fs.writeFile(filePath, `${JSON.stringify(fallbackValue, null, 2)}\n`, "utf8");
-  }
-}
-
-async function readJson(filePath, fallbackValue) {
-  try {
-    const value = await fs.readFile(filePath, "utf8");
-    return JSON.parse(value);
-  } catch {
-    return fallbackValue;
-  }
-}
-
-async function writeJson(filePath, data) {
-  await fs.writeFile(filePath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  await fs.mkdir(DATA_DIR, { recursive: true }).catch(() => {});
+  await fs.mkdir(PUBLIC_DIR, { recursive: true }).catch(() => {});
 }
 
 function sendJson(res, statusCode, data) {
@@ -777,8 +757,8 @@ function clearEscalation(jobId) {
   }
 }
 
-async function saveConfig(config) {
-  const merged = {
+function mergeConfig(config) {
+  return {
     ...clone(defaultConfig),
     ...clone(config),
     workspace: {
@@ -789,55 +769,67 @@ async function saveConfig(config) {
         ...((config.workspace || {}).businessHours || {})
       }
     },
-    slack: {
-      ...clone(defaultConfig.slack),
-      ...(config.slack || {})
-    },
-    twilio: {
-      ...clone(defaultConfig.twilio),
-      ...(config.twilio || {})
-    },
-    millis: {
-      ...clone(defaultConfig.millis),
-      ...(config.millis || {})
-    },
-    vapi: {
-      ...clone(defaultConfig.vapi),
-      ...(config.vapi || {})
-    },
+    slack: { ...clone(defaultConfig.slack), ...(config.slack || {}) },
+    twilio: { ...clone(defaultConfig.twilio), ...(config.twilio || {}) },
+    millis: { ...clone(defaultConfig.millis), ...(config.millis || {}) },
+    vapi: { ...clone(defaultConfig.vapi), ...(config.vapi || {}) },
     intakeFields: Array.isArray(config.intakeFields) ? config.intakeFields : clone(defaultConfig.intakeFields),
-    contacts: Array.isArray(config.contacts) ? config.contacts : [],
+    contacts: Array.isArray(config.contacts) ? config.contacts : clone(defaultConfig.contacts),
     routingRules: Array.isArray(config.routingRules) ? config.routingRules : clone(defaultConfig.routingRules),
-    messageTemplates: {
-      ...clone(defaultConfig.messageTemplates),
-      ...(config.messageTemplates || {})
-    }
+    messageTemplates: { ...clone(defaultConfig.messageTemplates), ...(config.messageTemplates || {}) }
   };
+}
 
-  await writeJson(CONFIG_FILE, merged);
+function overlayEnvSecrets(config) {
+  if (process.env.SLACK_WEBHOOK_URL) config.slack = { ...config.slack, webhookUrl: process.env.SLACK_WEBHOOK_URL };
+  if (process.env.TWILIO_ACCOUNT_SID) config.twilio = { ...config.twilio, accountSid: process.env.TWILIO_ACCOUNT_SID };
+  if (process.env.TWILIO_AUTH_TOKEN) config.twilio = { ...config.twilio, authToken: process.env.TWILIO_AUTH_TOKEN };
+  if (process.env.MILLIS_API_KEY) config.millis = { ...config.millis, apiKey: process.env.MILLIS_API_KEY };
+  if (process.env.MILLIS_PUBLIC_KEY) config.millis = { ...config.millis, publicKey: process.env.MILLIS_PUBLIC_KEY };
+  if (process.env.VAPI_API_KEY) config.vapi = { ...config.vapi, apiKey: process.env.VAPI_API_KEY };
+  if (process.env.VAPI_DISPATCH_ASSISTANT_ID) config.vapi = { ...config.vapi, dispatchAssistantId: process.env.VAPI_DISPATCH_ASSISTANT_ID };
+  if (process.env.VAPI_PHONE_NUMBER_ID) config.vapi = { ...config.vapi, phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID };
+  return config;
+}
+
+async function saveConfig(config) {
+  const merged = mergeConfig(config);
+  const sql = getDb();
+  if (sql) {
+    await sql`INSERT INTO pv_config (id, data, updated_at) VALUES ('default', ${JSON.stringify(merged)}, NOW())
+              ON CONFLICT (id) DO UPDATE SET data = ${JSON.stringify(merged)}, updated_at = NOW()`;
+  }
   return merged;
 }
 
 async function loadConfig() {
-  const current = await readJson(CONFIG_FILE, clone(defaultConfig));
-  // Overlay secrets from env vars (so config.json can be committed without creds)
-  if (process.env.SLACK_WEBHOOK_URL) current.slack = { ...current.slack, webhookUrl: process.env.SLACK_WEBHOOK_URL };
-  if (process.env.TWILIO_ACCOUNT_SID) current.twilio = { ...current.twilio, accountSid: process.env.TWILIO_ACCOUNT_SID };
-  if (process.env.TWILIO_AUTH_TOKEN) current.twilio = { ...current.twilio, authToken: process.env.TWILIO_AUTH_TOKEN };
-  if (process.env.MILLIS_API_KEY) current.millis = { ...current.millis, apiKey: process.env.MILLIS_API_KEY };
-  if (process.env.MILLIS_PUBLIC_KEY) current.millis = { ...current.millis, publicKey: process.env.MILLIS_PUBLIC_KEY };
-  if (process.env.VAPI_API_KEY) current.vapi = { ...current.vapi, apiKey: process.env.VAPI_API_KEY };
-  if (process.env.VAPI_DISPATCH_ASSISTANT_ID) current.vapi = { ...current.vapi, dispatchAssistantId: process.env.VAPI_DISPATCH_ASSISTANT_ID };
-  if (process.env.VAPI_PHONE_NUMBER_ID) current.vapi = { ...current.vapi, phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID };
-  return saveConfig(current);
+  const sql = getDb();
+  let current = clone(defaultConfig);
+  if (sql) {
+    const rows = await sql`SELECT data FROM pv_config WHERE id = 'default'`;
+    if (rows.length > 0) {
+      current = rows[0].data;
+    }
+  }
+  const merged = mergeConfig(current);
+  overlayEnvSecrets(merged);
+  return saveConfig(merged);
 }
 
 async function loadJobs() {
-  return readJson(JOBS_FILE, []);
+  const sql = getDb();
+  if (!sql) return [];
+  const rows = await sql`SELECT data FROM pv_jobs ORDER BY created_at DESC LIMIT 200`;
+  return rows.map((r) => r.data);
 }
 
 async function saveJobs(jobs) {
-  await writeJson(JOBS_FILE, jobs);
+  const sql = getDb();
+  if (!sql) return;
+  for (const job of jobs) {
+    await sql`INSERT INTO pv_jobs (id, data, created_at, updated_at) VALUES (${job.id}, ${JSON.stringify(job)}, ${job.createdAt}, NOW())
+              ON CONFLICT (id) DO UPDATE SET data = ${JSON.stringify(job)}, updated_at = NOW()`;
+  }
 }
 
 function sanitizeConfigForUi(config) {
@@ -1371,20 +1363,6 @@ let _initialized = false;
 async function ensureInit() {
   if (_initialized) return;
   await ensureDataFiles();
-  // On Vercel cold start, seed config from bundled defaults
-  if (IS_VERCEL) {
-    try {
-      await fs.access(CONFIG_FILE);
-    } catch {
-      const bundled = path.join(ROOT, "data", "config.json");
-      try {
-        const seed = await fs.readFile(bundled, "utf8");
-        await fs.writeFile(CONFIG_FILE, seed, "utf8");
-      } catch {
-        // No bundled config, will use defaults
-      }
-    }
-  }
   _initialized = true;
 }
 
@@ -1395,7 +1373,7 @@ async function handler(req, res) {
     if (url.pathname.startsWith("/api/")) {
       return await handleApi(req, res, url.pathname);
     }
-    if (IS_VERCEL) {
+    if (process.env.VERCEL === "1") {
       return sendText(res, 404, "Not found.");
     }
     return await serveStatic(res, url.pathname);
