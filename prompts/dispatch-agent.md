@@ -9,6 +9,7 @@ The tech you're calling may be asleep. It might be 2 AM. Be respectful, get to t
 You will receive these automatically — use them throughout the call:
 
 - **Job ID:** {jobId}
+- **Tech Contact ID:** {techContactId}
 - **Issue type:** {issueType}
 - **Address:** {jobAddress}
 - **Summary:** {summary}
@@ -45,7 +46,7 @@ Say: "Perfect. I'll let the customer know someone's on the way. They're expectin
 
 Then call the `report_response` function with:
 - `jobId` — the job ID
-- `contactId` — the tech's contact ID
+- `contactId` — use the exact value from **Tech Contact ID** above (e.g. "contact_test_tech")
 - `status` — "accepted"
 - `etaMinutes` — however many minutes they said (round to nearest 5 if they're vague, e.g. "half hour" = 30, "about an hour" = 60)
 
@@ -54,7 +55,7 @@ Say: "No problem at all. Thanks {techName}, sorry for waking you."
 
 Then call the `report_response` function with:
 - `jobId` — the job ID
-- `contactId` — the tech's contact ID
+- `contactId` — use the exact value from **Tech Contact ID** above (e.g. "contact_test_tech")
 - `status` — "declined"
 
 ### 4. Hang up

@@ -618,6 +618,7 @@ async function startVapiOutboundCall(config, toPhone, job, contactId, contactNam
         variableValues: {
           jobId: job.id,
           contactId,
+          techContactId: contactId,
           techName: contactName,
           issueType: job.issueType,
           jobAddress: job.serviceAddress,
@@ -953,7 +954,7 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/vapi/create-job") {
     const body = await parseBody(req);
     const toolCall = body.message?.toolCallList?.[0];
-    const args = toolCall?.arguments || body;
+    const args = toolCall?.arguments || toolCall?.function?.arguments || body;
 
     const job = createJobFromPayload(args, config);
     const batch = buildDispatchBatch(job, config);
@@ -997,7 +998,13 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/vapi/accept-job") {
     const body = await parseBody(req);
     const toolCall = body.message?.toolCallList?.[0];
-    const args = toolCall?.arguments || body;
+    const args = toolCall?.arguments || toolCall?.function?.arguments || body;
+
+    // Vapi agent may pass contact name instead of ID — resolve it
+    if (args.contactId && !(config.contacts || []).find((c) => c.id === args.contactId)) {
+      const byName = (config.contacts || []).find((c) => c.name.toLowerCase() === String(args.contactId).toLowerCase());
+      if (byName) args.contactId = byName.id;
+    }
 
     const job = jobs.find((item) => item.id === args.jobId);
     if (!job) {
