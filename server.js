@@ -497,7 +497,7 @@ function appendTimeline(job, type, payload = {}) {
 
 function createJobFromPayload(payload, config) {
   const job = {
-    id: payload.jobId || `job_${randomUUID()}`,
+    id: payload.jobId || `job_${Date.now().toString(36)}`,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     status: "open",
@@ -1006,7 +1006,15 @@ async function handleApi(req, res, pathname) {
       if (byName) args.contactId = byName.id;
     }
 
-    const job = jobs.find((item) => item.id === args.jobId);
+    let job = jobs.find((item) => item.id === args.jobId);
+    // Fuzzy match — voice models sometimes truncate UUIDs
+    if (!job && args.jobId) {
+      job = jobs.find((item) => item.id.startsWith(args.jobId) || item.id.includes(args.jobId));
+    }
+    // Last resort — use most recent open job
+    if (!job) {
+      job = [...jobs].reverse().find((item) => item.status === "open");
+    }
     if (!job) {
       const err = { error: "Job not found." };
       if (toolCall?.id) return sendJson(res, 200, { results: [{ toolCallId: toolCall.id, result: JSON.stringify(err) }] });
