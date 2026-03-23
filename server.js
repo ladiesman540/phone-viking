@@ -10,6 +10,11 @@ const DATA_DIR = path.join(ROOT, "data");
 const PUBLIC_DIR = path.join(ROOT, "public");
 const PORT = Number(process.env.PORT || 3007);
 
+function log(event, data = {}) {
+  const entry = { ts: new Date().toISOString(), event, ...data };
+  console.log(JSON.stringify(entry));
+}
+
 function getDb() {
   if (!process.env.DATABASE_URL) return null;
   return neon(process.env.DATABASE_URL);
@@ -504,9 +509,11 @@ function createJobFromPayload(payload, config) {
 
 async function sendSlackMessage(config, text) {
   if (!config?.slack?.enabled || !normalizeString(config.slack.webhookUrl)) {
+    log("slack-skip", { reason: "Slack disabled or webhook missing." });
     return { skipped: true, reason: "Slack disabled or webhook missing." };
   }
 
+  log("slack-send", { channel: config.slack.channelLabel, textPreview: text.slice(0, 120) });
   const response = await fetch(config.slack.webhookUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -514,20 +521,19 @@ async function sendSlackMessage(config, text) {
   });
 
   const body = await response.text();
-  return {
-    skipped: false,
-    ok: response.ok,
-    status: response.status,
-    body
-  };
+  const result = { skipped: false, ok: response.ok, status: response.status, body };
+  log("slack-result", { ok: response.ok, status: response.status });
+  return result;
 }
 
 async function sendTwilioSms(config, to, body) {
   const { accountSid, authToken, smsNumber } = config.twilio || {};
   if (!accountSid || !authToken || !smsNumber) {
+    log("sms-skip", { to, reason: "Twilio not configured." });
     return { skipped: true, reason: "Twilio not configured." };
   }
 
+  log("sms-send", { from: smsNumber, to, bodyPreview: body.slice(0, 120) });
   const url = `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`;
   const params = new URLSearchParams({ From: smsNumber, To: to, Body: body });
   const response = await fetch(url, {
@@ -540,16 +546,19 @@ async function sendTwilioSms(config, to, body) {
   });
 
   const result = await response.json();
+  log("sms-result", { to, ok: response.ok, status: response.status, sid: result.sid, error: result.message });
   return { skipped: false, ok: response.ok, status: response.status, sid: result.sid, error: result.message };
 }
 
 async function startMillisOutboundCall(config, toPhone, job, contactId, contactName) {
   const { apiKey, dispatchAgentId, baseUrl } = config.millis || {};
   if (!apiKey || !dispatchAgentId) {
+    log("millis-call-skip", { contactId, contactName, reason: "Millis dispatch agent not configured." });
     return { skipped: true, reason: "Millis dispatch agent not configured." };
   }
 
   const fromPhone = normalizeString(config.millis?.outboundNumber);
+  log("millis-call-start", { jobId: job.id, contactId, contactName, toPhone, fromPhone: fromPhone || "(default)" });
 
   const response = await fetch(`${baseUrl || "https://api-west.millis.ai"}/start_outbound_call`, {
     method: "POST",
@@ -577,14 +586,18 @@ async function startMillisOutboundCall(config, toPhone, job, contactId, contactN
   });
 
   const result = await response.json();
+  log("millis-call-result", { jobId: job.id, contactId, ok: response.ok, status: response.status, callId: result.call_id });
   return { skipped: false, ok: response.ok, status: response.status, callId: result.call_id, sessionId: result.session_id };
 }
 
 async function startVapiOutboundCall(config, toPhone, job, contactId, contactName) {
   const { apiKey, dispatchAssistantId, phoneNumberId, baseUrl } = config.vapi || {};
   if (!apiKey || !dispatchAssistantId) {
+    log("vapi-call-skip", { contactId, contactName, reason: "Vapi dispatch agent not configured." });
     return { skipped: true, reason: "Vapi dispatch agent not configured." };
   }
+
+  log("vapi-call-start", { jobId: job.id, contactId, contactName, toPhone, phoneNumberId });
 
   const response = await fetch(`${baseUrl || "https://api.vapi.ai"}/call`, {
     method: "POST",
@@ -618,15 +631,24 @@ async function startVapiOutboundCall(config, toPhone, job, contactId, contactNam
   const text = await response.text();
   let result;
   try { result = JSON.parse(text); } catch { result = { raw: text }; }
+  log("vapi-call-result", { jobId: job.id, contactId, ok: response.ok, status: response.status, callId: result.id, error: result.message || result.error || null });
   return { skipped: false, ok: response.ok, status: response.status, callId: result.id, error: result.message || result.error || null };
 }
 
 async function callCustomerUpdate(config, job, updateType, techName, etaMinutes) {
   const { apiKey, phoneNumberId, baseUrl } = config.vapi || {};
-  if (!apiKey) return { skipped: true, reason: "Vapi not configured." };
+  if (!apiKey) {
+    log("customer-callback-skip", { jobId: job.id, reason: "Vapi not configured." });
+    return { skipped: true, reason: "Vapi not configured." };
+  }
 
   const customerPhone = normalizeString(job.callbackNumber);
-  if (!customerPhone) return { skipped: true, reason: "No callback number." };
+  if (!customerPhone) {
+    log("customer-callback-skip", { jobId: job.id, reason: "No callback number." });
+    return { skipped: true, reason: "No callback number." };
+  }
+
+  log("customer-callback-start", { jobId: job.id, updateType, customerPhone, techName: techName || null });
 
   let firstMessage, systemPrompt;
   if (updateType === "accepted") {
@@ -665,14 +687,19 @@ async function callCustomerUpdate(config, job, updateType, techName, etaMinutes)
   const text = await response.text();
   let result;
   try { result = JSON.parse(text); } catch { result = { raw: text }; }
+  log("customer-callback-result", { jobId: job.id, updateType, ok: response.ok, status: response.status, callId: result.id, error: result.message || result.error || null });
   return { skipped: false, ok: response.ok, status: response.status, callId: result.id, error: result.message || result.error || null };
 }
 
 async function dispatchBatch(job, batch, config) {
+  log("dispatch-batch", { jobId: job.id, tier: batch.tier, contactCount: batch.contacts.length, contactNames: batch.contacts.map((c) => c.name) });
   const results = [];
   for (const contact of batch.contacts) {
     const phone = normalizeString(contact.phone);
-    if (!phone) continue;
+    if (!phone) {
+      log("dispatch-skip-no-phone", { jobId: job.id, contactId: contact.id, contactName: contact.name });
+      continue;
+    }
 
     // Send SMS if enabled
     if (batch.strategy.sendSms && contact.renderedSms) {
@@ -713,16 +740,22 @@ async function dispatchBatch(job, batch, config) {
 
 function scheduleEscalation(jobId, delayMinutes, config) {
   clearEscalation(jobId);
+  log("escalation-scheduled", { jobId, delayMinutes });
   const timer = setTimeout(async () => {
     escalationTimers.delete(jobId);
     try {
       const jobs = await loadJobs();
       const job = jobs.find((j) => j.id === jobId);
-      if (!job || job.status === "accepted") return;
+      if (!job || job.status === "accepted") {
+        log("escalation-skip", { jobId, reason: !job ? "job not found" : "already accepted" });
+        return;
+      }
+      log("escalation-firing", { jobId });
 
       const currentConfig = await loadConfig();
       const batch = buildDispatchBatch(job, currentConfig);
       if (!batch.contacts.length) {
+        log("escalation-exhausted", { jobId });
         appendTimeline(job, "escalation-exhausted", { message: "No more contacts available." });
         if (batch.strategy.notifySlackOnEscalation) {
           await sendSlackMessage(currentConfig, `*Escalation exhausted* for job ${job.id} — no more contacts available.`);
@@ -734,6 +767,7 @@ function scheduleEscalation(jobId, delayMinutes, config) {
         return;
       }
 
+      log("escalation-triggered", { jobId, tier: batch.tier, contactNames: batch.contacts.map((c) => c.name) });
       appendTimeline(job, "escalation-triggered", { tier: batch.tier, contactIds: batch.contacts.map((c) => c.id) });
       if (batch.strategy.notifySlackOnEscalation) {
         await sendSlackMessage(currentConfig, `*Escalating* job ${job.id} to tier ${batch.tier}: ${batch.contacts.map((c) => c.name).join(", ")}`);
@@ -746,7 +780,7 @@ function scheduleEscalation(jobId, delayMinutes, config) {
       // Schedule next escalation
       scheduleEscalation(jobId, batch.strategy.escalateAfterMinutes, currentConfig);
     } catch (error) {
-      console.error(`Escalation error for job ${jobId}:`, error.message);
+      log("escalation-error", { jobId, error: error.message });
     }
   }, delayMinutes * 60 * 1000);
   escalationTimers.set(jobId, timer);
@@ -913,6 +947,11 @@ async function handleApi(req, res, pathname) {
   const host = req.headers.host || `localhost:${PORT}`;
   const baseUrl = `${req.headers["x-forwarded-proto"] || "http"}://${host}`;
 
+  // Skip logging for high-frequency read endpoints
+  if (pathname !== "/api/health" && pathname !== "/api/config" && pathname !== "/api/jobs") {
+    log("api-request", { method: req.method, pathname });
+  }
+
   if (req.method === "GET" && pathname === "/api/health") {
     return sendJson(res, 200, { ok: true, port: PORT });
   }
@@ -922,6 +961,7 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "PUT" && pathname === "/api/config") {
+    log("config-update", { source: "dashboard" });
     const body = await parseBody(req);
     const saved = await saveConfig(body);
     return sendJson(res, 200, saved);
@@ -938,9 +978,11 @@ async function handleApi(req, res, pathname) {
 
   if (req.method === "POST" && pathname === "/api/jobs") {
     const body = await parseBody(req);
+    log("job-create", { source: "api", callerName: body.callerName, issueType: body.issueType, urgency: body.urgency });
     const job = createJobFromPayload(body, config);
     const batch = buildDispatchBatch(job, config);
     jobs.push(job);
+    log("job-created", { jobId: job.id, matchedRule: job.matchedRuleId || "(none)", batchSize: batch.contacts.length });
     await saveJobs(jobs);
     return sendJson(res, 201, { job, batch });
   }
@@ -954,10 +996,12 @@ async function handleApi(req, res, pathname) {
     const toolCall = body.message?.toolCallList?.[0];
     const args = toolCall?.arguments || toolCall?.function?.arguments || body;
 
+    log("job-create", { source: "vapi", callerName: args.callerName, issueType: args.issueType, urgency: args.urgency, locationArea: args.locationArea });
     const job = createJobFromPayload(args, config);
     const batch = buildDispatchBatch(job, config);
     const slackText = renderTemplate(config.messageTemplates?.slackSummary, getTemplateValues(job));
     jobs.push(job);
+    log("job-created", { jobId: job.id, matchedRule: job.matchedRuleId || "(none)", batchSize: batch.contacts.length, tier: batch.tier });
     appendTimeline(job, "initial-batch-generated", {
       tier: batch.tier,
       contactIds: batch.contacts.map((contact) => contact.id)
@@ -997,6 +1041,7 @@ async function handleApi(req, res, pathname) {
     const body = await parseBody(req);
     const toolCall = body.message?.toolCallList?.[0];
     const args = toolCall?.arguments || toolCall?.function?.arguments || body;
+    log("vapi-accept-job", { jobId: args.jobId, contactId: args.contactId, status: args.status || "accepted" });
 
     // Vapi agent may pass contact name instead of ID — resolve it
     if (args.contactId && !(config.contacts || []).find((c) => c.id === args.contactId)) {
@@ -1020,6 +1065,7 @@ async function handleApi(req, res, pathname) {
     }
 
     if (args.status === "declined") {
+      log("job-declined", { source: "vapi", jobId: job.id, contactId: args.contactId });
       const declinedContact = (config.contacts || []).find((item) => item.id === args.contactId);
       const attempt = {
         id: `attempt_${randomUUID()}`,
@@ -1059,6 +1105,7 @@ async function handleApi(req, res, pathname) {
 
     // accepted
     const contact = (config.contacts || []).find((item) => item.id === args.contactId);
+    log("job-accepted", { source: "vapi", jobId: job.id, contactId: args.contactId, contactName: contact?.name || args.contactId, etaMinutes: args.etaMinutes });
     job.status = "accepted";
     job.updatedAt = new Date().toISOString();
     job.acceptedBy = {
@@ -1089,10 +1136,12 @@ async function handleApi(req, res, pathname) {
 
   if (req.method === "POST" && pathname === "/api/millis/create-job") {
     const body = await parseBody(req);
+    log("job-create", { source: "millis", callerName: body.callerName, issueType: body.issueType, urgency: body.urgency, locationArea: body.locationArea });
     const job = createJobFromPayload(body, config);
     const batch = buildDispatchBatch(job, config);
     const slackText = renderTemplate(config.messageTemplates?.slackSummary, getTemplateValues(job));
     jobs.push(job);
+    log("job-created", { jobId: job.id, matchedRule: job.matchedRuleId || "(none)", batchSize: batch.contacts.length, tier: batch.tier });
     appendTimeline(job, "initial-batch-generated", {
       tier: batch.tier,
       contactIds: batch.contacts.map((contact) => contact.id)
@@ -1181,10 +1230,12 @@ async function handleApi(req, res, pathname) {
     const body = await parseBody(req);
     const job = jobs.find((item) => item.id === body.jobId);
     if (!job) {
+      log("accept-job-not-found", { source: "millis", jobId: body.jobId });
       return sendJson(res, 404, { error: "Job not found." });
     }
 
     const contact = (config.contacts || []).find((item) => item.id === body.contactId);
+    log("job-accepted", { source: "millis", jobId: job.id, contactId: body.contactId, contactName: contact?.name || body.contactId });
     job.status = "accepted";
     job.updatedAt = new Date().toISOString();
     job.acceptedBy = {
@@ -1219,13 +1270,17 @@ async function handleApi(req, res, pathname) {
     const smsBody = normalizeString(body.Body).toLowerCase();
     const isAccept = ["yes", "y", "accept", "ok"].includes(smsBody);
     const isDecline = ["no", "n", "decline", "pass"].includes(smsBody);
+    log("sms-incoming", { from, body: body.Body, isAccept, isDecline });
 
     // Find the contact by phone number
     const contact = (config.contacts || []).find((c) => normalizeString(c.phone) === from || normalizeString(c.smsPhone) === from);
     if (!contact) {
+      log("sms-unknown-number", { from });
       res.writeHead(200, { "Content-Type": "text/xml" });
       return res.end("<Response><Message>Unknown number. Contact dispatch directly.</Message></Response>");
     }
+
+    log("sms-contact-matched", { from, contactId: contact.id, contactName: contact.name });
 
     // Find the most recent open job this contact was dispatched to
     const openJobs = jobs.filter((j) => j.status === "open");
@@ -1234,11 +1289,13 @@ async function handleApi(req, res, pathname) {
     );
 
     if (!matchedJob) {
+      log("sms-no-open-job", { contactId: contact.id });
       res.writeHead(200, { "Content-Type": "text/xml" });
       return res.end("<Response><Message>No active job found for you.</Message></Response>");
     }
 
     if (isAccept) {
+      log("job-accepted", { source: "sms", jobId: matchedJob.id, contactId: contact.id, contactName: contact.name });
       matchedJob.status = "accepted";
       matchedJob.updatedAt = new Date().toISOString();
       matchedJob.acceptedBy = {
@@ -1264,6 +1321,7 @@ async function handleApi(req, res, pathname) {
     }
 
     if (isDecline) {
+      log("job-declined", { source: "sms", jobId: matchedJob.id, contactId: contact.id, contactName: contact.name });
       const attempt = {
         id: `attempt_${randomUUID()}`,
         at: new Date().toISOString(),
@@ -1306,6 +1364,7 @@ async function handleApi(req, res, pathname) {
     const jobId = metadata.jobId;
     const contactId = metadata.contactId;
     const callStatus = normalizeString(body.status || body.call_status);
+    log("call-ended", { jobId, contactId, callStatus, duration: body.duration, callId: body.call_id });
 
     if (jobId) {
       const job = jobs.find((j) => j.id === jobId);
@@ -1337,8 +1396,10 @@ async function handleApi(req, res, pathname) {
     const body = await parseBody(req);
     const job = jobs.find((item) => item.id === body.jobId);
     if (!job) {
+      log("decline-job-not-found", { source: "millis", jobId: body.jobId });
       return sendJson(res, 404, { error: "Job not found." });
     }
+    log("job-declined", { source: "millis", jobId: job.id, contactId: body.contactId });
 
     const attempt = {
       id: `attempt_${randomUUID()}`,
@@ -1399,6 +1460,7 @@ async function handler(req, res) {
     }
     return await serveStatic(res, url.pathname);
   } catch (error) {
+    log("api-error", { method: req.method, url: req.url, error: error.message, stack: error.stack?.split("\n").slice(0, 3).join(" | ") });
     sendJson(res, 500, { error: error.message });
   }
 }
