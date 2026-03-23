@@ -651,7 +651,10 @@ async function callCustomerUpdate(config, job, updateType, techName, etaMinutes)
           model: "gpt-4o-mini",
           messages: [{ role: "system", content: systemPrompt }]
         },
-        voice: { provider: "11labs", voiceId: "21m00Tcm4TlvDq8ikWAM" },
+        voice: { provider: "11labs", voiceId: "cjVigY5qzO86Huf0OWal", stability: 0.6, similarityBoost: 0.85 },
+        transcriber: { provider: "deepgram", model: "nova-2", language: "en" },
+        backgroundDenoisingEnabled: true,
+        silenceTimeoutSeconds: 20,
         firstMessage
       },
       phoneNumberId: phoneNumberId || undefined,
