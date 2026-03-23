@@ -1250,6 +1250,10 @@ async function handleApi(req, res, pathname) {
       const ackText = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(matchedJob, contact));
       await sendTwilioSms(config, from, ackText);
       try { await sendSlackMessage(config, ackText); } catch {}
+
+      // Call customer to let them know a tech is on the way
+      const customerCallResult = await callCustomerUpdate(config, matchedJob, "accepted", contact.name);
+      appendTimeline(matchedJob, "customer-callback", { type: "accepted", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
       await saveJobs(jobs);
 
       res.writeHead(200, { "Content-Type": "text/xml" });
@@ -1268,6 +1272,20 @@ async function handleApi(req, res, pathname) {
       matchedJob.attempts.push(attempt);
       matchedJob.updatedAt = new Date().toISOString();
       appendTimeline(matchedJob, "job-declined", attempt);
+
+      // Notify Slack
+      try {
+        await sendSlackMessage(config, `*Tech declined via SMS* — ${contact.name} declined job ${matchedJob.id} (${matchedJob.issueType} at ${matchedJob.locationArea}).`);
+      } catch {}
+
+      // Check if any contacts left
+      const batch = buildDispatchBatch(matchedJob, config);
+      if (!batch.contacts.length) {
+        appendTimeline(matchedJob, "escalation-exhausted", { message: "No more contacts available." });
+        try { await sendSlackMessage(config, `*Escalation exhausted* for job ${matchedJob.id} — no techs available. Calling customer.`); } catch {}
+        const customerCallResult = await callCustomerUpdate(config, matchedJob, "unavailable");
+        appendTimeline(matchedJob, "customer-callback", { type: "unavailable", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
+      }
       await saveJobs(jobs);
 
       res.writeHead(200, { "Content-Type": "text/xml" });
