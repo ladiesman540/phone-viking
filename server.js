@@ -688,6 +688,30 @@ async function handleLateAccept(job, config, contact, jobs) {
   return false;
 }
 
+async function checkHumanReview(job, config, trigger, context) {
+  const hr = config.humanReview || {};
+  if (!hr.enabled) return;
+  const triggerMap = {
+    ambiguousResponse: hr.triggerOnAmbiguousResponse,
+    conflictingAcceptances: hr.triggerOnConflictingAcceptances,
+    safetyRisk: hr.triggerOnSafetyRisk,
+    pricingIssue: hr.triggerOnPricingIssue
+  };
+  if (triggerMap[trigger] === false) return;
+
+  const flag = { trigger, at: new Date().toISOString(), resolved: false, context };
+  job.humanReviewFlags = job.humanReviewFlags || [];
+  job.humanReviewFlags.push(flag);
+  appendTimeline(job, "human-review-flagged", { trigger, context });
+  log("human-review-flagged", { jobId: job.id, trigger, context });
+
+  if (hr.slackNotify) {
+    try {
+      await sendSlackMessage(config, `*Human review needed* — ${trigger}: ${context}`, job.slackThreadTs);
+    } catch {}
+  }
+}
+
 function appendTimeline(job, type, payload = {}, actor = "system") {
   const event = {
     id: `evt_${randomUUID()}`,
@@ -754,7 +778,26 @@ function createJobFromPayload(payload, config) {
   return job;
 }
 
-async function sendSlackMessage(config, text) {
+async function sendSlackMessage(config, text, threadTs = null) {
+  const botToken = normalizeString(config.slack?.botToken);
+  const channelId = normalizeString(config.slack?.channelId);
+
+  // Prefer Slack Web API (supports threading) over webhook
+  if (botToken && channelId) {
+    log("slack-send", { channel: channelId, threadTs: threadTs || "(new)", textPreview: text.slice(0, 120) });
+    const payload = { channel: channelId, text };
+    if (threadTs) payload.thread_ts = threadTs;
+    const response = await fetch("https://slack.com/api/chat.postMessage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${botToken}` },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json();
+    log("slack-result", { ok: data.ok, ts: data.ts, error: data.error });
+    return { skipped: false, ok: data.ok, ts: data.ts, threadTs: threadTs || data.ts, error: data.error };
+  }
+
+  // Fallback to webhook (no threading)
   if (!config?.slack?.enabled || !normalizeString(config.slack.webhookUrl)) {
     log("slack-skip", { reason: "Slack disabled or webhook missing." });
     return { skipped: true, reason: "Slack disabled or webhook missing." };
@@ -1062,6 +1105,8 @@ function mergeConfig(config) {
 
 function overlayEnvSecrets(config) {
   if (process.env.SLACK_WEBHOOK_URL) config.slack = { ...config.slack, webhookUrl: process.env.SLACK_WEBHOOK_URL };
+  if (process.env.SLACK_BOT_TOKEN) config.slack = { ...config.slack, botToken: process.env.SLACK_BOT_TOKEN };
+  if (process.env.SLACK_CHANNEL_ID) config.slack = { ...config.slack, channelId: process.env.SLACK_CHANNEL_ID };
   if (process.env.TWILIO_ACCOUNT_SID) config.twilio = { ...config.twilio, accountSid: process.env.TWILIO_ACCOUNT_SID };
   if (process.env.TWILIO_AUTH_TOKEN) config.twilio = { ...config.twilio, authToken: process.env.TWILIO_AUTH_TOKEN };
   if (process.env.MILLIS_API_KEY) config.millis = { ...config.millis, apiKey: process.env.MILLIS_API_KEY };
@@ -1243,10 +1288,16 @@ async function handleApi(req, res, pathname) {
     const job = createJobFromPayload(args, config);
     jobs.push(job);
 
-    // Post initial Slack summary
+    // Human review triggers at creation
+    if (normalizeString(job.hazards)) await checkHumanReview(job, config, "safetyRisk", `Hazards reported: ${job.hazards}`);
+    if (job.authorizedContact === false) await checkHumanReview(job, config, "pricingIssue", "Caller is not an authorized contact");
+    if (normalizeString(job.poApprovalRequired)) await checkHumanReview(job, config, "pricingIssue", `PO/approval required: ${job.poApprovalRequired}`);
+
+    // Post initial Slack summary and capture thread timestamp
     const slackText = renderTemplate(config.messageTemplates?.slackSummary, getTemplateValues(job));
     try {
       const slackResult = await sendSlackMessage(config, slackText);
+      if (slackResult.ts) job.slackThreadTs = slackResult.ts;
       appendTimeline(job, "slack-summary", slackResult, "system");
     } catch (error) {
       appendTimeline(job, "slack-summary-failed", { message: error.message });
@@ -1683,6 +1734,54 @@ async function handleApi(req, res, pathname) {
     const batch = buildDispatchBatch(job, config);
     await saveJobs(jobs);
     return sendJson(res, 200, { success: true, job, nextBatch: batch });
+  }
+
+  // Vapi call-ended webhook
+  if (req.method === "POST" && pathname === "/api/vapi/call-ended") {
+    const body = await parseBody(req);
+    const metadata = body.message?.call?.metadata || body.metadata || {};
+    const jobId = metadata.jobId;
+    const contactId = metadata.contactId || metadata.techContactId;
+    const callStatus = normalizeString(body.message?.call?.status || body.status || body.call_status);
+    log("call-ended", { source: "vapi", jobId, contactId, callStatus, duration: body.message?.call?.duration || body.duration });
+
+    if (jobId) {
+      const job = jobs.find((j) => j.id === jobId);
+      if (job) {
+        appendTimeline(job, "call-ended", { contactId, callStatus, duration: body.message?.call?.duration || body.duration });
+        const attempt = (job.attempts || []).find((a) => a.contactId === contactId && a.channel === "call" && a.status === "ringing");
+        if (attempt) {
+          attempt.status = callStatus === "ended" || callStatus === "completed" ? "answered" : (callStatus || "no-answer");
+        }
+        // If call ended without acceptance and job is still open, advance escalation
+        const noAnswer = !["ended", "completed"].includes(callStatus);
+        if (noAnswer && getJobStatus(job) === "open") {
+          log("call-no-answer-advance", { jobId, contactId, callStatus });
+          await advanceEscalation(job, config, jobs);
+        } else {
+          job.updatedAt = new Date().toISOString();
+          await saveJobs(jobs);
+        }
+      }
+    }
+    return sendJson(res, 200, { success: true });
+  }
+
+  // Resolve human review flag
+  if (req.method === "POST" && pathname.startsWith("/api/jobs/") && pathname.endsWith("/resolve-review")) {
+    const jobId = pathname.split("/")[3];
+    const job = jobs.find((j) => j.id === jobId);
+    if (!job) return sendJson(res, 404, { error: "Job not found." });
+    const body = await parseBody(req);
+    const flagIndex = (job.humanReviewFlags || []).findIndex((f) => f.trigger === body.trigger && !f.resolved);
+    if (flagIndex >= 0) {
+      job.humanReviewFlags[flagIndex].resolved = true;
+      job.humanReviewFlags[flagIndex].resolvedAt = new Date().toISOString();
+      job.humanReviewFlags[flagIndex].resolvedBy = normalizeString(body.resolvedBy || "dispatcher");
+      appendTimeline(job, "human-review-resolved", { trigger: body.trigger }, "dispatcher");
+      await saveJobs(jobs);
+    }
+    return sendJson(res, 200, { success: true, job });
   }
 
   sendJson(res, 404, { error: "Not found." });
