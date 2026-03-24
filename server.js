@@ -23,6 +23,54 @@ function getDb() {
 // Active escalation timers keyed by jobId
 const escalationTimers = new Map();
 
+// Case states (v4 state machine)
+const STATES = Object.freeze({
+  OPEN_PENDING_DISPATCH: "OPEN_PENDING_DISPATCH",
+  AWAITING_TECH1_RESPONSE: "AWAITING_TECH1_RESPONSE",
+  AWAITING_TECH2_RESPONSE: "AWAITING_TECH2_RESPONSE",
+  AWAITING_TECH1_FINAL_RETRY: "AWAITING_TECH1_FINAL_RETRY",
+  AWAITING_SUBCONTRACTOR_RESPONSE: "AWAITING_SUBCONTRACTOR_RESPONSE",
+  PROVISIONAL_SUB_ASSIGNMENT: "PROVISIONAL_SUB_ASSIGNMENT",
+  DISPATCH_CONFIRMED_INTERNAL: "DISPATCH_CONFIRMED_INTERNAL",
+  DISPATCH_CONFIRMED_SUBCONTRACTOR: "DISPATCH_CONFIRMED_SUBCONTRACTOR",
+  UNABLE_TO_DISPATCH: "UNABLE_TO_DISPATCH",
+  CANCEL_SUBCONTRACTOR_PENDING: "CANCEL_SUBCONTRACTOR_PENDING",
+  CLOSED: "CLOSED"
+});
+
+const ALLOWED_TRANSITIONS = {
+  [STATES.OPEN_PENDING_DISPATCH]: [STATES.AWAITING_TECH1_RESPONSE],
+  [STATES.AWAITING_TECH1_RESPONSE]: [STATES.AWAITING_TECH2_RESPONSE, STATES.DISPATCH_CONFIRMED_INTERNAL],
+  [STATES.AWAITING_TECH2_RESPONSE]: [STATES.AWAITING_TECH1_FINAL_RETRY, STATES.DISPATCH_CONFIRMED_INTERNAL],
+  [STATES.AWAITING_TECH1_FINAL_RETRY]: [STATES.AWAITING_SUBCONTRACTOR_RESPONSE, STATES.DISPATCH_CONFIRMED_INTERNAL],
+  [STATES.AWAITING_SUBCONTRACTOR_RESPONSE]: [STATES.PROVISIONAL_SUB_ASSIGNMENT, STATES.UNABLE_TO_DISPATCH],
+  [STATES.PROVISIONAL_SUB_ASSIGNMENT]: [STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, STATES.CANCEL_SUBCONTRACTOR_PENDING, STATES.DISPATCH_CONFIRMED_INTERNAL],
+  [STATES.CANCEL_SUBCONTRACTOR_PENDING]: [STATES.DISPATCH_CONFIRMED_INTERNAL],
+  [STATES.DISPATCH_CONFIRMED_INTERNAL]: [STATES.CLOSED],
+  [STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR]: [STATES.CLOSED],
+  [STATES.UNABLE_TO_DISPATCH]: [STATES.CLOSED, STATES.DISPATCH_CONFIRMED_INTERNAL]
+};
+
+function getJobStatus(job) {
+  const s = job.state;
+  if (!s) return job.status || "open";
+  if (s === STATES.DISPATCH_CONFIRMED_INTERNAL || s === STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR) return "accepted";
+  if (s === STATES.CLOSED || s === STATES.UNABLE_TO_DISPATCH) return "closed";
+  return "open";
+}
+
+function transitionState(job, newState, payload = {}) {
+  const from = job.state || STATES.OPEN_PENDING_DISPATCH;
+  const allowed = ALLOWED_TRANSITIONS[from];
+  if (allowed && !allowed.includes(newState)) {
+    log("state-transition-blocked", { jobId: job.id, from, to: newState });
+  }
+  job.state = newState;
+  job.status = getJobStatus(job);
+  job.updatedAt = new Date().toISOString();
+  appendTimeline(job, "state-change", { from, to: newState, ...payload });
+}
+
 const defaultConfig = {
   workspace: {
     businessName: "Phone Viking Dispatch",
@@ -56,6 +104,26 @@ const defaultConfig = {
     dispatchAssistantId: process.env.VAPI_DISPATCH_ASSISTANT_ID || "",
     phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID || "",
     baseUrl: "https://api.vapi.ai"
+  },
+  voiceScripts: {
+    customerInitial: "Hi {{callerName}}, this is {{businessName}}. We received your request about the {{issueType}} issue and we're reaching out to our on-call team right now. Someone should be calling you back shortly.",
+    customerAccepted: "Hi {{callerName}}, this is {{businessName}} calling back about your {{issueType}} emergency. Good news — we've got a tech heading your way.{{etaText}} They'll call you when they're close. Is there anything else you need before they arrive?",
+    customerSubDispatched: "Hi {{callerName}}, this is {{businessName}} calling back. We've arranged a service partner to assist you tonight with your {{issueType}} issue. They should be reaching out to you shortly.",
+    customerUnavailable: "Hi {{callerName}}, this is {{businessName}} calling back about your {{issueType}} request. Unfortunately we weren't able to reach any of our on-call techs tonight. If this is still urgent, you can call our direct line at 587-809-6383. We really apologize for the inconvenience.",
+    customerSubCancelledTechAssigned: "Hi {{callerName}}, this is {{businessName}} with an update. Good news — one of our own techs is now heading your way for your {{issueType}} issue.{{etaText}} They'll call you when they're close.",
+    subCancellation: "Hi, this is {{businessName}} dispatch. We had a service request we'd reached out about, but one of our techs is now available to cover it. You're off the hook — sorry for the back and forth."
+  },
+  humanReview: {
+    enabled: true,
+    triggerOnAmbiguousResponse: true,
+    triggerOnConflictingAcceptances: true,
+    triggerOnSafetyRisk: true,
+    triggerOnPricingIssue: true,
+    slackNotify: true
+  },
+  escalation: {
+    defaultTimerMinutes: 3,
+    subReplacementWindowMinutes: 10
   },
   intakeFields: [
     {
@@ -109,7 +177,9 @@ const defaultConfig = {
     partnerSms:
       "Partner request {{jobId}}: {{issueType}} at {{locationArea}}. {{summary}} Reply YES if available.",
     acceptanceAck:
-      "Confirmed. {{contactName}} has accepted job {{jobId}}."
+      "Confirmed. {{contactName}} has accepted job {{jobId}}.",
+    subcontractorSms:
+      "Service partner request {{jobId}}: {{issueType}} at {{locationArea}}. Please call back to confirm availability."
   },
   contacts: [
     {
@@ -142,10 +212,14 @@ const defaultConfig = {
       strategy: {
         initialTier: 1,
         batchSize: 1,
-        escalateAfterMinutes: 5,
+        escalateAfterMinutes: 3,
         leaveVoicemail: false,
         sendSms: true,
-        notifySlackOnEscalation: true
+        notifySlackOnEscalation: true,
+        escalationSequence: [
+          { contactId: "contact_test_tech" }
+        ],
+        subReplacementWindowMinutes: 10
       },
       targetContactIds: ["contact_test_tech"]
     },
@@ -164,10 +238,14 @@ const defaultConfig = {
       strategy: {
         initialTier: 1,
         batchSize: 1,
-        escalateAfterMinutes: 5,
+        escalateAfterMinutes: 3,
         leaveVoicemail: false,
         sendSms: true,
-        notifySlackOnEscalation: true
+        notifySlackOnEscalation: true,
+        escalationSequence: [
+          { contactId: "contact_test_tech" }
+        ],
+        subReplacementWindowMinutes: 10
       },
       targetContactIds: ["contact_test_tech"]
     }
@@ -469,10 +547,107 @@ function buildDispatchBatch(job, config, options = {}) {
   };
 }
 
-function appendTimeline(job, type, payload = {}) {
+// --- v4 Escalation Sequence Engine ---
+
+function isContactAvailable(contact) {
+  if (!contact || contact.active === false || contact.doNotUse) return false;
+  const now = new Date();
+  const overrides = contact.tempOverrides || {};
+  if (overrides.unavailableUntil && new Date(overrides.unavailableUntil) > now) return false;
+  if (overrides.doNotCallBefore && new Date(overrides.doNotCallBefore) > now) return false;
+  for (const bp of (contact.blackoutPeriods || [])) {
+    if (bp.start && bp.end && now >= new Date(bp.start) && now <= new Date(bp.end)) return false;
+  }
+  return true;
+}
+
+function getEscalationTarget(job, config) {
+  const rule = (config.routingRules || []).find((r) => r.id === job.matchedRuleId);
+  const sequence = rule?.strategy?.escalationSequence;
+  if (!sequence || !sequence.length) return null;
+
+  const contactMap = getContactMap(config);
+  let step = job.escalationStep;
+  while (step < sequence.length) {
+    const entry = sequence[step];
+    const contact = contactMap.get(entry.contactId);
+    if (contact && isContactAvailable(contact)) {
+      return { contact, isPartner: !!entry.partner, step };
+    }
+    log("escalation-skip-unavailable", { jobId: job.id, step, contactId: entry.contactId });
+    step++;
+  }
+  return null;
+}
+
+function stateForStep(step, sequence) {
+  if (!sequence || step >= sequence.length) return null;
+  if (sequence[step].partner) return STATES.AWAITING_SUBCONTRACTOR_RESPONSE;
+  // Determine which AWAITING state based on tech contact identity
+  const contactId = sequence[step].contactId;
+  const firstTechId = sequence.find((e) => !e.partner)?.contactId;
+  const secondTechId = sequence.find((e) => !e.partner && e.contactId !== firstTechId)?.contactId;
+  // Count how many times this contact has appeared before this step
+  const priorAppearances = sequence.slice(0, step).filter((e) => e.contactId === contactId).length;
+  if (contactId === firstTechId && priorAppearances > 0) return STATES.AWAITING_TECH1_FINAL_RETRY;
+  if (contactId === firstTechId) return STATES.AWAITING_TECH1_RESPONSE;
+  if (contactId === secondTechId) return STATES.AWAITING_TECH2_RESPONSE;
+  return STATES.AWAITING_TECH1_RESPONSE;
+}
+
+async function advanceEscalation(job, config, jobs) {
+  job.escalationStep++;
+  const target = getEscalationTarget(job, config);
+
+  if (!target) {
+    log("escalation-exhausted", { jobId: job.id, step: job.escalationStep });
+    transitionState(job, STATES.UNABLE_TO_DISPATCH);
+    const customerResult = await callCustomerUpdate(config, job, "unavailable");
+    appendTimeline(job, "customer-callback", { type: "unavailable", callId: customerResult.callId, error: customerResult.error, skipped: customerResult.skipped });
+    job.customerCallbacks.push({ type: "unavailable", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
+    await sendSlackMessage(config, `*Escalation exhausted* for job ${job.id} — no more contacts available.`);
+    clearEscalation(job.id);
+    await saveJobs(jobs);
+    return;
+  }
+
+  job.escalationStep = target.step;
+  const rule = (config.routingRules || []).find((r) => r.id === job.matchedRuleId);
+  const sequence = rule?.strategy?.escalationSequence || [];
+  const newState = stateForStep(target.step, sequence);
+  if (newState) transitionState(job, newState, { contactId: target.contact.id });
+
+  const smsTemplate = target.isPartner
+    ? (config.messageTemplates?.subcontractorSms || defaultConfig.messageTemplates.subcontractorSms)
+    : (normalizeString(target.contact.type).toLowerCase() === "partner"
+      ? (config.messageTemplates?.partnerSms || defaultConfig.messageTemplates.partnerSms)
+      : (config.messageTemplates?.techSms || defaultConfig.messageTemplates.techSms));
+
+  const values = getTemplateValues(job, target.contact);
+  const renderedSms = renderTemplate(smsTemplate, values);
+  const batch = {
+    contacts: [{ ...target.contact, renderedSms, renderedSummary: buildJobSummary(job) }],
+    strategy: rule?.strategy || {},
+    tier: target.contact.priorityTier || 1,
+    matchedRule: rule
+  };
+
+  log("escalation-step", { jobId: job.id, step: target.step, contactId: target.contact.id, contactName: target.contact.name, isPartner: target.isPartner });
+  await sendSlackMessage(config, `*Escalation step ${target.step + 1}*: contacting ${target.contact.name} for job ${job.id}`);
+  await dispatchBatch(job, batch, config);
+  await saveJobs(jobs);
+
+  const timerMinutes = target.isPartner
+    ? Number(rule?.strategy?.subReplacementWindowMinutes || config.escalation?.subReplacementWindowMinutes || 10)
+    : Number(rule?.strategy?.escalateAfterMinutes || config.escalation?.defaultTimerMinutes || 3);
+  scheduleEscalation(job.id, timerMinutes, config, job.escalationStep);
+}
+
+function appendTimeline(job, type, payload = {}, actor = "system") {
   const event = {
     id: `evt_${randomUUID()}`,
     type,
+    actor,
     at: new Date().toISOString(),
     ...payload
   };
@@ -485,25 +660,52 @@ function createJobFromPayload(payload, config) {
     id: payload.jobId || `job_${Date.now().toString(36)}`,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
+    state: STATES.OPEN_PENDING_DISPATCH,
     status: "open",
+    // Caller info
     callerName: normalizeString(payload.callerName),
     callbackNumber: normalizeString(payload.callbackNumber),
+    alternateNumber: normalizeString(payload.alternateNumber),
+    companySiteName: normalizeString(payload.companySiteName),
+    email: normalizeString(payload.email),
+    // Location
     serviceAddress: normalizeString(payload.serviceAddress),
     locationArea: normalizeString(payload.locationArea || payload.serviceAddress),
+    // Issue details
     issueType: normalizeString(payload.issueType),
     urgency: normalizeString(payload.urgency || "routine"),
     summary: normalizeString(payload.summary),
     notes: normalizeString(payload.notes),
+    equipmentInvolved: normalizeString(payload.equipmentInvolved),
+    severity: normalizeString(payload.severity || "standard"),
+    anyoneOnsite: !!payload.anyoneOnsite,
+    accessInstructions: normalizeString(payload.accessInstructions),
+    hazards: normalizeString(payload.hazards),
+    photosVideoAvailable: !!payload.photosVideoAvailable,
+    // Commercial
+    poApprovalRequired: normalizeString(payload.poApprovalRequired),
+    billingNotes: normalizeString(payload.billingNotes),
+    authorizedContact: payload.authorizedContact !== false,
+    // Routing + escalation
     metadata: payload.metadata || {},
     matchedRuleId: "",
+    escalationStep: 0,
+    // Subcontractor tracking
+    provisionalSubId: null,
+    provisionalSubAt: null,
+    // Dispatch history
     attempts: [],
     acceptedBy: null,
-    timeline: []
+    timeline: [],
+    // Comms + audit
+    humanReviewFlags: [],
+    slackThreadTs: null,
+    customerCallbacks: []
   };
 
   const matchedRule = findMatchingRule(job, config);
   job.matchedRuleId = matchedRule?.id || "";
-  appendTimeline(job, "job-created", { matchedRuleId: job.matchedRuleId });
+  appendTimeline(job, "job-created", { matchedRuleId: job.matchedRuleId }, "ai-intake");
   return job;
 }
 
@@ -738,47 +940,26 @@ async function dispatchBatch(job, batch, config) {
   return results;
 }
 
-function scheduleEscalation(jobId, delayMinutes, config) {
+function scheduleEscalation(jobId, delayMinutes, config, scheduledForStep) {
   clearEscalation(jobId);
-  log("escalation-scheduled", { jobId, delayMinutes });
+  log("escalation-scheduled", { jobId, delayMinutes, scheduledForStep });
   const timer = setTimeout(async () => {
     escalationTimers.delete(jobId);
     try {
       const jobs = await loadJobs();
       const job = jobs.find((j) => j.id === jobId);
-      if (!job || job.status === "accepted") {
-        log("escalation-skip", { jobId, reason: !job ? "job not found" : "already accepted" });
+      if (!job || getJobStatus(job) !== "open") {
+        log("escalation-skip", { jobId, reason: !job ? "job not found" : `state: ${job?.state}` });
         return;
       }
-      log("escalation-firing", { jobId });
-
+      // Skip if a decline already advanced past this step
+      if (scheduledForStep != null && job.escalationStep !== scheduledForStep) {
+        log("escalation-skip", { jobId, reason: "step already advanced", scheduledForStep, currentStep: job.escalationStep });
+        return;
+      }
+      log("escalation-firing", { jobId, step: job.escalationStep });
       const currentConfig = await loadConfig();
-      const batch = buildDispatchBatch(job, currentConfig);
-      if (!batch.contacts.length) {
-        log("escalation-exhausted", { jobId });
-        appendTimeline(job, "escalation-exhausted", { message: "No more contacts available." });
-        if (batch.strategy.notifySlackOnEscalation) {
-          await sendSlackMessage(currentConfig, `*Escalation exhausted* for job ${job.id} — no more contacts available.`);
-        }
-        // Call the customer to let them know no tech is available
-        const customerCallResult = await callCustomerUpdate(currentConfig, job, "unavailable");
-        appendTimeline(job, "customer-callback", { type: "unavailable", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
-        await saveJobs(jobs);
-        return;
-      }
-
-      log("escalation-triggered", { jobId, tier: batch.tier, contactNames: batch.contacts.map((c) => c.name) });
-      appendTimeline(job, "escalation-triggered", { tier: batch.tier, contactIds: batch.contacts.map((c) => c.id) });
-      if (batch.strategy.notifySlackOnEscalation) {
-        await sendSlackMessage(currentConfig, `*Escalating* job ${job.id} to tier ${batch.tier}: ${batch.contacts.map((c) => c.name).join(", ")}`);
-      }
-
-      await dispatchBatch(job, batch, currentConfig);
-      job.updatedAt = new Date().toISOString();
-      await saveJobs(jobs);
-
-      // Schedule next escalation
-      scheduleEscalation(jobId, batch.strategy.escalateAfterMinutes, currentConfig);
+      await advanceEscalation(job, currentConfig, jobs);
     } catch (error) {
       log("escalation-error", { jobId, error: error.message });
     }
@@ -813,7 +994,10 @@ function mergeConfig(config) {
     intakeFields: Array.isArray(config.intakeFields) ? config.intakeFields : clone(defaultConfig.intakeFields),
     contacts: Array.isArray(config.contacts) ? config.contacts : clone(defaultConfig.contacts),
     routingRules: Array.isArray(config.routingRules) ? config.routingRules : clone(defaultConfig.routingRules),
-    messageTemplates: { ...clone(defaultConfig.messageTemplates), ...(config.messageTemplates || {}) }
+    messageTemplates: { ...clone(defaultConfig.messageTemplates), ...(config.messageTemplates || {}) },
+    voiceScripts: { ...clone(defaultConfig.voiceScripts), ...(config.voiceScripts || {}) },
+    humanReview: { ...clone(defaultConfig.humanReview), ...(config.humanReview || {}) },
+    escalation: { ...clone(defaultConfig.escalation), ...(config.escalation || {}) }
   };
 }
 
@@ -998,36 +1182,47 @@ async function handleApi(req, res, pathname) {
 
     log("job-create", { source: "vapi", callerName: args.callerName, issueType: args.issueType, urgency: args.urgency, locationArea: args.locationArea });
     const job = createJobFromPayload(args, config);
-    const batch = buildDispatchBatch(job, config);
-    const slackText = renderTemplate(config.messageTemplates?.slackSummary, getTemplateValues(job));
     jobs.push(job);
-    log("job-created", { jobId: job.id, matchedRule: job.matchedRuleId || "(none)", batchSize: batch.contacts.length, tier: batch.tier });
-    appendTimeline(job, "initial-batch-generated", {
-      tier: batch.tier,
-      contactIds: batch.contacts.map((contact) => contact.id)
-    });
-    await saveJobs(jobs);
 
-    let slackResult = { skipped: true, reason: "Not attempted." };
+    // Post initial Slack summary
+    const slackText = renderTemplate(config.messageTemplates?.slackSummary, getTemplateValues(job));
     try {
-      slackResult = await sendSlackMessage(config, slackText);
-      appendTimeline(job, "slack-summary", slackResult);
-      await saveJobs(jobs);
+      const slackResult = await sendSlackMessage(config, slackText);
+      appendTimeline(job, "slack-summary", slackResult, "system");
     } catch (error) {
       appendTimeline(job, "slack-summary-failed", { message: error.message });
-      await saveJobs(jobs);
     }
 
-    let dispatchResults = [];
-    if (batch.contacts.length) {
-      dispatchResults = await dispatchBatch(job, batch, config);
-      await saveJobs(jobs);
-      if (batch.strategy.escalateAfterMinutes > 0) {
-        scheduleEscalation(job.id, batch.strategy.escalateAfterMinutes, config);
-      }
-    }
+    // Dispatch first step in escalation sequence
+    const target = getEscalationTarget(job, config);
+    let resultMessage;
+    if (target) {
+      const rule = (config.routingRules || []).find((r) => r.id === job.matchedRuleId);
+      const sequence = rule?.strategy?.escalationSequence || [];
+      const newState = stateForStep(target.step, sequence);
+      if (newState) transitionState(job, newState, { contactId: target.contact.id });
+      log("job-created", { jobId: job.id, matchedRule: job.matchedRuleId || "(none)", firstContact: target.contact.name, step: target.step });
 
-    const resultMessage = `Job ${job.id} created. ${batch.contacts.length} contact(s) being dispatched.`;
+      const smsTemplate = target.isPartner
+        ? (config.messageTemplates?.subcontractorSms || defaultConfig.messageTemplates.subcontractorSms)
+        : (config.messageTemplates?.techSms || defaultConfig.messageTemplates.techSms);
+      const values = getTemplateValues(job, target.contact);
+      const batch = {
+        contacts: [{ ...target.contact, renderedSms: renderTemplate(smsTemplate, values), renderedSummary: buildJobSummary(job) }],
+        strategy: rule?.strategy || { sendSms: true },
+        tier: target.contact.priorityTier || 1,
+        matchedRule: rule
+      };
+      await dispatchBatch(job, batch, config);
+
+      const timerMinutes = Number(rule?.strategy?.escalateAfterMinutes || config.escalation?.defaultTimerMinutes || 3);
+      scheduleEscalation(job.id, timerMinutes, config, job.escalationStep);
+      resultMessage = `Job ${job.id} created. Contacting ${target.contact.name}.`;
+    } else {
+      log("job-created", { jobId: job.id, matchedRule: job.matchedRuleId || "(none)", firstContact: "(none)" });
+      resultMessage = `Job ${job.id} created. No contacts available for dispatch.`;
+    }
+    await saveJobs(jobs);
 
     if (toolCall?.id) {
       return sendJson(res, 200, {
@@ -1064,6 +1259,13 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 404, err);
     }
 
+    // Guard: already accepted
+    if (getJobStatus(job) === "accepted" || job.state === STATES.CLOSED) {
+      const err = { success: false, reason: "Job already accepted." };
+      if (toolCall?.id) return sendJson(res, 200, { results: [{ toolCallId: toolCall.id, result: JSON.stringify(err) }] });
+      return sendJson(res, 200, err);
+    }
+
     if (args.status === "declined") {
       log("job-declined", { source: "vapi", jobId: job.id, contactId: args.contactId });
       const declinedContact = (config.contacts || []).find((item) => item.id === args.contactId);
@@ -1077,26 +1279,14 @@ async function handleApi(req, res, pathname) {
       };
       job.attempts.push(attempt);
       job.updatedAt = new Date().toISOString();
-      appendTimeline(job, "job-declined", attempt);
+      appendTimeline(job, "job-declined", attempt, `tech:${args.contactId}`);
 
-      // Notify Slack that tech declined
       try {
         await sendSlackMessage(config, `*Tech declined* — ${declinedContact?.name || args.contactId} declined job ${job.id} (${job.issueType} at ${job.locationArea}).`);
       } catch {}
 
-      const batch = buildDispatchBatch(job, config);
-
-      // If no more contacts to try, call customer immediately
-      if (!batch.contacts.length) {
-        appendTimeline(job, "escalation-exhausted", { message: "No more contacts available." });
-        try {
-          await sendSlackMessage(config, `*Escalation exhausted* for job ${job.id} — no techs available. Calling customer.`);
-        } catch {}
-        const customerCallResult = await callCustomerUpdate(config, job, "unavailable");
-        appendTimeline(job, "customer-callback", { type: "unavailable", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
-      }
-
-      await saveJobs(jobs);
+      // Immediately advance to next escalation step
+      await advanceEscalation(job, config, jobs);
 
       const result = { success: true, status: "declined" };
       if (toolCall?.id) return sendJson(res, 200, { results: [{ toolCallId: toolCall.id, result: JSON.stringify(result) }] });
@@ -1106,8 +1296,7 @@ async function handleApi(req, res, pathname) {
     // accepted
     const contact = (config.contacts || []).find((item) => item.id === args.contactId);
     log("job-accepted", { source: "vapi", jobId: job.id, contactId: args.contactId, contactName: contact?.name || args.contactId, etaMinutes: args.etaMinutes });
-    job.status = "accepted";
-    job.updatedAt = new Date().toISOString();
+    transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: args.contactId });
     job.acceptedBy = {
       contactId: normalizeString(args.contactId),
       contactName: contact?.name || "",
@@ -1116,7 +1305,7 @@ async function handleApi(req, res, pathname) {
       etaMinutes: args.etaMinutes || null,
       notes: normalizeString(args.notes)
     };
-    appendTimeline(job, "job-accepted", job.acceptedBy);
+    appendTimeline(job, "job-accepted", job.acceptedBy, `tech:${args.contactId}`);
     clearEscalation(job.id);
 
     const acknowledgement = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(job, contact));
@@ -1213,7 +1402,7 @@ async function handleApi(req, res, pathname) {
 
     if (attempt.status === "accepted") {
       const contact = (config.contacts || []).find((item) => item.id === attempt.contactId);
-      job.status = "accepted";
+      transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: attempt.contactId });
       job.acceptedBy = {
         contactId: attempt.contactId,
         contactName: contact?.name || "",
@@ -1236,8 +1425,7 @@ async function handleApi(req, res, pathname) {
 
     const contact = (config.contacts || []).find((item) => item.id === body.contactId);
     log("job-accepted", { source: "millis", jobId: job.id, contactId: body.contactId, contactName: contact?.name || body.contactId });
-    job.status = "accepted";
-    job.updatedAt = new Date().toISOString();
+    transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: body.contactId });
     job.acceptedBy = {
       contactId: normalizeString(body.contactId),
       contactName: contact?.name || "",
@@ -1245,7 +1433,7 @@ async function handleApi(req, res, pathname) {
       at: new Date().toISOString(),
       notes: normalizeString(body.notes)
     };
-    appendTimeline(job, "job-accepted", job.acceptedBy);
+    appendTimeline(job, "job-accepted", job.acceptedBy, `tech:${body.contactId}`);
     clearEscalation(job.id);
 
     const acknowledgement = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(job, contact));
@@ -1296,15 +1484,14 @@ async function handleApi(req, res, pathname) {
 
     if (isAccept) {
       log("job-accepted", { source: "sms", jobId: matchedJob.id, contactId: contact.id, contactName: contact.name });
-      matchedJob.status = "accepted";
-      matchedJob.updatedAt = new Date().toISOString();
+      transitionState(matchedJob, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: contact.id });
       matchedJob.acceptedBy = {
         contactId: contact.id,
         contactName: contact.name,
         channel: "sms",
         at: new Date().toISOString()
       };
-      appendTimeline(matchedJob, "job-accepted", matchedJob.acceptedBy);
+      appendTimeline(matchedJob, "job-accepted", matchedJob.acceptedBy, `tech:${contact.id}`);
       clearEscalation(matchedJob.id);
 
       const ackText = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(matchedJob, contact));
@@ -1332,22 +1519,14 @@ async function handleApi(req, res, pathname) {
       };
       matchedJob.attempts.push(attempt);
       matchedJob.updatedAt = new Date().toISOString();
-      appendTimeline(matchedJob, "job-declined", attempt);
+      appendTimeline(matchedJob, "job-declined", attempt, `tech:${contact.id}`);
 
-      // Notify Slack
       try {
         await sendSlackMessage(config, `*Tech declined via SMS* — ${contact.name} declined job ${matchedJob.id} (${matchedJob.issueType} at ${matchedJob.locationArea}).`);
       } catch {}
 
-      // Check if any contacts left
-      const batch = buildDispatchBatch(matchedJob, config);
-      if (!batch.contacts.length) {
-        appendTimeline(matchedJob, "escalation-exhausted", { message: "No more contacts available." });
-        try { await sendSlackMessage(config, `*Escalation exhausted* for job ${matchedJob.id} — no techs available. Calling customer.`); } catch {}
-        const customerCallResult = await callCustomerUpdate(config, matchedJob, "unavailable");
-        appendTimeline(matchedJob, "customer-callback", { type: "unavailable", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
-      }
-      await saveJobs(jobs);
+      // Immediately advance to next escalation step
+      await advanceEscalation(matchedJob, config, jobs);
 
       res.writeHead(200, { "Content-Type": "text/xml" });
       return res.end("<Response><Message>Got it, you've been removed from this job.</Message></Response>");
