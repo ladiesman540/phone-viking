@@ -92,13 +92,6 @@ const defaultConfig = {
     accountSid: process.env.TWILIO_ACCOUNT_SID || "",
     authToken: process.env.TWILIO_AUTH_TOKEN || ""
   },
-  millis: {
-    apiKey: process.env.MILLIS_API_KEY || "",
-    publicKey: process.env.MILLIS_PUBLIC_KEY || "",
-    intakeAgentId: process.env.MILLIS_AGENT_ID || "",
-    dispatchAgentId: process.env.MILLIS_AGENT_ID || "",
-    baseUrl: "https://api-west.millis.ai"
-  },
   vapi: {
     apiKey: process.env.VAPI_API_KEY || "",
     dispatchAssistantId: process.env.VAPI_DISPATCH_ASSISTANT_ID || "",
@@ -296,7 +289,7 @@ async function parseBody(req) {
     return Object.fromEntries(new URLSearchParams(raw).entries());
   }
 
-  // Try parsing as JSON even without the header (Millis may not send Content-Type)
+  // Try parsing as JSON even without Content-Type header
   try {
     return JSON.parse(raw);
   } catch {}
@@ -840,46 +833,6 @@ async function sendTwilioSms(config, to, body) {
   return { skipped: false, ok: response.ok, status: response.status, sid: result.sid, error: result.message };
 }
 
-async function startMillisOutboundCall(config, toPhone, job, contactId, contactName) {
-  const { apiKey, dispatchAgentId, baseUrl } = config.millis || {};
-  if (!apiKey || !dispatchAgentId) {
-    log("millis-call-skip", { contactId, contactName, reason: "Millis dispatch agent not configured." });
-    return { skipped: true, reason: "Millis dispatch agent not configured." };
-  }
-
-  const fromPhone = normalizeString(config.millis?.outboundNumber);
-  log("millis-call-start", { jobId: job.id, contactId, contactName, toPhone, fromPhone: fromPhone || "(default)" });
-
-  const response = await fetch(`${baseUrl || "https://api-west.millis.ai"}/start_outbound_call`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: apiKey
-    },
-    body: JSON.stringify({
-      agent_id: dispatchAgentId,
-      from_phone: fromPhone || undefined,
-      to_phone: toPhone,
-      metadata: {
-        jobId: job.id,
-        contactId,
-        techName: contactName,
-        issueType: job.issueType,
-        jobAddress: job.serviceAddress,
-        summary: job.summary,
-        callerName: job.callerName,
-        callbackNumber: job.callbackNumber,
-        notes: job.notes
-      },
-      include_metadata_in_prompt: true
-    })
-  });
-
-  const result = await response.json();
-  log("millis-call-result", { jobId: job.id, contactId, ok: response.ok, status: response.status, callId: result.call_id });
-  return { skipped: false, ok: response.ok, status: response.status, callId: result.call_id, sessionId: result.session_id };
-}
-
 async function startVapiOutboundCall(config, toPhone, job, contactId, contactName) {
   const { apiKey, dispatchAssistantId, phoneNumberId, baseUrl } = config.vapi || {};
   if (!apiKey || !dispatchAssistantId) {
@@ -1021,10 +974,8 @@ async function dispatchBatch(job, batch, config) {
       results.push({ contactId: contact.id, channel: "sms", result: smsResult });
     }
 
-    // Start outbound call via Vapi (fallback to Millis if Vapi not configured)
-    const callResult = (config.vapi?.apiKey && config.vapi?.dispatchAssistantId)
-      ? await startVapiOutboundCall(config, phone, job, contact.id, contact.name)
-      : await startMillisOutboundCall(config, phone, job, contact.id, contact.name);
+    // Start outbound call via Vapi
+    const callResult = await startVapiOutboundCall(config, phone, job, contact.id, contact.name);
     if (!callResult.skipped) {
       const attempt = {
         id: `attempt_${randomUUID()}`,
@@ -1091,7 +1042,6 @@ function mergeConfig(config) {
     },
     slack: { ...clone(defaultConfig.slack), ...(config.slack || {}) },
     twilio: { ...clone(defaultConfig.twilio), ...(config.twilio || {}) },
-    millis: { ...clone(defaultConfig.millis), ...(config.millis || {}) },
     vapi: { ...clone(defaultConfig.vapi), ...(config.vapi || {}) },
     intakeFields: Array.isArray(config.intakeFields) ? config.intakeFields : clone(defaultConfig.intakeFields),
     contacts: Array.isArray(config.contacts) ? config.contacts : clone(defaultConfig.contacts),
@@ -1109,8 +1059,6 @@ function overlayEnvSecrets(config) {
   if (process.env.SLACK_CHANNEL_ID) config.slack = { ...config.slack, channelId: process.env.SLACK_CHANNEL_ID };
   if (process.env.TWILIO_ACCOUNT_SID) config.twilio = { ...config.twilio, accountSid: process.env.TWILIO_ACCOUNT_SID };
   if (process.env.TWILIO_AUTH_TOKEN) config.twilio = { ...config.twilio, authToken: process.env.TWILIO_AUTH_TOKEN };
-  if (process.env.MILLIS_API_KEY) config.millis = { ...config.millis, apiKey: process.env.MILLIS_API_KEY };
-  if (process.env.MILLIS_PUBLIC_KEY) config.millis = { ...config.millis, publicKey: process.env.MILLIS_PUBLIC_KEY };
   if (process.env.VAPI_API_KEY) config.vapi = { ...config.vapi, apiKey: process.env.VAPI_API_KEY };
   if (process.env.VAPI_DISPATCH_ASSISTANT_ID) config.vapi = { ...config.vapi, dispatchAssistantId: process.env.VAPI_DISPATCH_ASSISTANT_ID };
   if (process.env.VAPI_PHONE_NUMBER_ID) config.vapi = { ...config.vapi, phoneNumberId: process.env.VAPI_PHONE_NUMBER_ID };
@@ -1161,74 +1109,6 @@ function sanitizeConfigForUi(config) {
   return config;
 }
 
-function buildFunctionDefinitions(baseUrl) {
-  return [
-    {
-      name: "create_job",
-      method: "POST",
-      url: `${baseUrl}/api/millis/create-job`,
-      description: "Create a dispatch job from the intake agent and immediately return the best first outreach batch.",
-      parameters: {
-        callerName: "string",
-        callbackNumber: "string",
-        serviceAddress: "string",
-        locationArea: "string",
-        issueType: "string",
-        urgency: "string",
-        summary: "string",
-        notes: "string"
-      }
-    },
-    {
-      name: "get_next_targets",
-      method: "POST",
-      url: `${baseUrl}/api/millis/get-next-targets`,
-      description: "Return the next call/SMS batch for a job based on routing rules and prior attempts.",
-      parameters: {
-        jobId: "string",
-        overrideTier: "number?"
-      }
-    },
-    {
-      name: "log_attempt",
-      method: "POST",
-      url: `${baseUrl}/api/millis/log-attempt`,
-      description: "Record the result of a call or SMS attempt.",
-      parameters: {
-        jobId: "string",
-        contactId: "string",
-        channel: "call|sms",
-        status: "queued|ringing|answered|accepted|declined|no-answer|voicemail|failed",
-        notes: "string?"
-      }
-    },
-    {
-      name: "accept_job",
-      method: "POST",
-      url: `${baseUrl}/api/millis/accept-job`,
-      description: "Mark a job accepted and stop escalation.",
-      parameters: {
-        jobId: "string",
-        contactId: "string",
-        channel: "call|sms",
-        notes: "string?"
-      }
-    },
-    {
-      name: "decline_job",
-      method: "POST",
-      url: `${baseUrl}/api/millis/decline-job`,
-      description: "Mark that a contact declined the job and return the next available batch if needed.",
-      parameters: {
-        jobId: "string",
-        contactId: "string",
-        channel: "call|sms",
-        notes: "string?"
-      }
-    }
-  ];
-}
-
 async function handleApi(req, res, pathname) {
   const config = await loadConfig();
   const jobs = await loadJobs();
@@ -1258,10 +1138,6 @@ async function handleApi(req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/jobs") {
     const sorted = clone(jobs).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
     return sendJson(res, 200, sorted);
-  }
-
-  if (req.method === "GET" && pathname === "/api/millis/function-definitions") {
-    return sendJson(res, 200, buildFunctionDefinitions(baseUrl));
   }
 
   if (req.method === "POST" && pathname === "/api/jobs") {
@@ -1444,136 +1320,6 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, result);
   }
 
-  // --- Millis endpoints (kept for backward compatibility) ---
-
-  if (req.method === "POST" && pathname === "/api/millis/create-job") {
-    const body = await parseBody(req);
-    log("job-create", { source: "millis", callerName: body.callerName, issueType: body.issueType, urgency: body.urgency, locationArea: body.locationArea });
-    const job = createJobFromPayload(body, config);
-    const batch = buildDispatchBatch(job, config);
-    const slackText = renderTemplate(config.messageTemplates?.slackSummary, getTemplateValues(job));
-    jobs.push(job);
-    log("job-created", { jobId: job.id, matchedRule: job.matchedRuleId || "(none)", batchSize: batch.contacts.length, tier: batch.tier });
-    appendTimeline(job, "initial-batch-generated", {
-      tier: batch.tier,
-      contactIds: batch.contacts.map((contact) => contact.id)
-    });
-    await saveJobs(jobs);
-
-    let slackResult = { skipped: true, reason: "Not attempted." };
-    try {
-      slackResult = await sendSlackMessage(config, slackText);
-      appendTimeline(job, "slack-summary", slackResult);
-      await saveJobs(jobs);
-    } catch (error) {
-      appendTimeline(job, "slack-summary-failed", { message: error.message });
-      await saveJobs(jobs);
-      slackResult = { skipped: false, ok: false, message: error.message };
-    }
-
-    // Actually dispatch SMS + calls to the first batch
-    let dispatchResults = [];
-    if (batch.contacts.length) {
-      dispatchResults = await dispatchBatch(job, batch, config);
-      await saveJobs(jobs);
-
-      // Schedule escalation if no response
-      if (batch.strategy.escalateAfterMinutes > 0) {
-        scheduleEscalation(job.id, batch.strategy.escalateAfterMinutes, config);
-      }
-    }
-
-    return sendJson(res, 200, {
-      success: true,
-      message: `Job ${job.id} created. ${batch.contacts.length} contact(s) being dispatched.`,
-      jobId: job.id
-    });
-  }
-
-  if (req.method === "POST" && pathname === "/api/millis/get-next-targets") {
-    const body = await parseBody(req);
-    const job = jobs.find((item) => item.id === body.jobId);
-    if (!job) {
-      return sendJson(res, 404, { error: "Job not found." });
-    }
-    const batch = buildDispatchBatch(job, config, { overrideTier: body.overrideTier });
-    appendTimeline(job, "batch-requested", { tier: batch.tier, contactIds: batch.contacts.map((contact) => contact.id) });
-    job.updatedAt = new Date().toISOString();
-    await saveJobs(jobs);
-    return sendJson(res, 200, { success: true, job, batch });
-  }
-
-  if (req.method === "POST" && pathname === "/api/millis/log-attempt") {
-    const body = await parseBody(req);
-    const job = jobs.find((item) => item.id === body.jobId);
-    if (!job) {
-      return sendJson(res, 404, { error: "Job not found." });
-    }
-
-    const attempt = {
-      id: `attempt_${randomUUID()}`,
-      at: new Date().toISOString(),
-      contactId: normalizeString(body.contactId),
-      channel: normalizeString(body.channel || "call"),
-      status: normalizeString(body.status || "queued"),
-      notes: normalizeString(body.notes)
-    };
-
-    job.attempts.push(attempt);
-    job.updatedAt = new Date().toISOString();
-    appendTimeline(job, "attempt-logged", attempt);
-
-    if (attempt.status === "accepted") {
-      const contact = (config.contacts || []).find((item) => item.id === attempt.contactId);
-      transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: attempt.contactId });
-      job.acceptedBy = {
-        contactId: attempt.contactId,
-        contactName: contact?.name || "",
-        channel: attempt.channel,
-        at: attempt.at
-      };
-    }
-
-    await saveJobs(jobs);
-    return sendJson(res, 200, { success: true, job, attempt });
-  }
-
-  if (req.method === "POST" && pathname === "/api/millis/accept-job") {
-    const body = await parseBody(req);
-    const job = jobs.find((item) => item.id === body.jobId);
-    if (!job) {
-      log("accept-job-not-found", { source: "millis", jobId: body.jobId });
-      return sendJson(res, 404, { error: "Job not found." });
-    }
-
-    const contact = (config.contacts || []).find((item) => item.id === body.contactId);
-    log("job-accepted", { source: "millis", jobId: job.id, contactId: body.contactId, contactName: contact?.name || body.contactId });
-    transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: body.contactId });
-    job.acceptedBy = {
-      contactId: normalizeString(body.contactId),
-      contactName: contact?.name || "",
-      channel: normalizeString(body.channel || "call"),
-      at: new Date().toISOString(),
-      notes: normalizeString(body.notes)
-    };
-    appendTimeline(job, "job-accepted", job.acceptedBy, `tech:${body.contactId}`);
-    clearEscalation(job.id);
-
-    const acknowledgement = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(job, contact));
-    let slackResult = { skipped: true, reason: "Not attempted." };
-
-    try {
-      slackResult = await sendSlackMessage(config, acknowledgement);
-      appendTimeline(job, "slack-acceptance", slackResult);
-    } catch (error) {
-      appendTimeline(job, "slack-acceptance-failed", { message: error.message });
-      slackResult = { skipped: false, ok: false, message: error.message };
-    }
-
-    await saveJobs(jobs);
-    return sendJson(res, 200, { success: true, job, slack: slackResult });
-  }
-
   // Twilio incoming SMS webhook — techs reply YES/NO
   if (req.method === "POST" && pathname === "/api/twilio/incoming-sms") {
     const body = await parseBody(req);
@@ -1672,68 +1418,6 @@ async function handleApi(req, res, pathname) {
 
     res.writeHead(200, { "Content-Type": "text/xml" });
     return res.end("<Response><Message>Reply YES to accept or NO to decline.</Message></Response>");
-  }
-
-  // Millis end-of-call webhook — capture call results
-  if (req.method === "POST" && pathname === "/api/millis/call-ended") {
-    const body = await parseBody(req);
-    const metadata = body.metadata || {};
-    const jobId = metadata.jobId;
-    const contactId = metadata.contactId;
-    const callStatus = normalizeString(body.status || body.call_status);
-    log("call-ended", { jobId, contactId, callStatus, duration: body.duration, callId: body.call_id });
-
-    if (jobId) {
-      const job = jobs.find((j) => j.id === jobId);
-      if (job) {
-        appendTimeline(job, "call-ended", {
-          contactId,
-          callStatus,
-          duration: body.duration,
-          callId: body.call_id
-        });
-
-        // Update the attempt status based on call outcome
-        const attempt = (job.attempts || []).find(
-          (a) => a.contactId === contactId && a.channel === "call" && a.status === "ringing"
-        );
-        if (attempt) {
-          attempt.status = callStatus === "completed" ? "answered" : (callStatus || "no-answer");
-        }
-
-        job.updatedAt = new Date().toISOString();
-        await saveJobs(jobs);
-      }
-    }
-
-    return sendJson(res, 200, { success: true });
-  }
-
-  if (req.method === "POST" && pathname === "/api/millis/decline-job") {
-    const body = await parseBody(req);
-    const job = jobs.find((item) => item.id === body.jobId);
-    if (!job) {
-      log("decline-job-not-found", { source: "millis", jobId: body.jobId });
-      return sendJson(res, 404, { error: "Job not found." });
-    }
-    log("job-declined", { source: "millis", jobId: job.id, contactId: body.contactId });
-
-    const attempt = {
-      id: `attempt_${randomUUID()}`,
-      at: new Date().toISOString(),
-      contactId: normalizeString(body.contactId),
-      channel: normalizeString(body.channel || "call"),
-      status: "declined",
-      notes: normalizeString(body.notes)
-    };
-
-    job.attempts.push(attempt);
-    job.updatedAt = new Date().toISOString();
-    appendTimeline(job, "job-declined", attempt);
-
-    const batch = buildDispatchBatch(job, config);
-    await saveJobs(jobs);
-    return sendJson(res, 200, { success: true, job, nextBatch: batch });
   }
 
   // Vapi call-ended webhook
