@@ -643,6 +643,51 @@ async function advanceEscalation(job, config, jobs) {
   scheduleEscalation(job.id, timerMinutes, config, job.escalationStep);
 }
 
+async function handleLateAccept(job, config, contact, jobs) {
+  // Tech accepting while sub is provisional — cancel sub, assign tech
+  if (job.state === STATES.PROVISIONAL_SUB_ASSIGNMENT) {
+    if (contact.mayReplaceSubcontractor === false) {
+      log("late-accept-blocked", { jobId: job.id, contactId: contact.id, reason: "contact may not replace subcontractor" });
+      return false;
+    }
+    const subContact = (config.contacts || []).find((c) => c.id === job.provisionalSubId);
+    log("partner-superseded", { jobId: job.id, techContactId: contact.id, partnerId: job.provisionalSubId });
+    transitionState(job, STATES.CANCEL_SUBCONTRACTOR_PENDING, { techContactId: contact.id });
+
+    // Courtesy SMS to subcontractor
+    if (subContact) {
+      const subPhone = normalizeString(subContact.smsPhone || subContact.phone);
+      if (subPhone) {
+        await sendTwilioSms(config, subPhone, "Disregard previous dispatch — a tech has accepted the job. Sorry for the back and forth.");
+      }
+    }
+    appendTimeline(job, "sub-cancelled", { partnerId: job.provisionalSubId, reason: "tech-override", techContactId: contact.id });
+    await sendSlackMessage(config, `*Tech override* — ${contact.name} accepted job ${job.id}, canceling subcontractor outreach.`);
+
+    transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: contact.id });
+    const customerResult = await callCustomerUpdate(config, job, "sub_cancelled_tech_assigned", contact.name);
+    appendTimeline(job, "customer-callback", { type: "sub_cancelled_tech_assigned", callId: customerResult.callId, error: customerResult.error, skipped: customerResult.skipped });
+    job.customerCallbacks.push({ type: "sub_cancelled_tech_assigned", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
+    clearEscalation(job.id);
+    await saveJobs(jobs);
+    return true;
+  }
+
+  // Tech accepting after exhaustion — late but better than nothing
+  if (job.state === STATES.UNABLE_TO_DISPATCH) {
+    log("late-accept-from-exhausted", { jobId: job.id, contactId: contact.id });
+    transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: contact.id });
+    const customerResult = await callCustomerUpdate(config, job, "accepted", contact.name);
+    appendTimeline(job, "customer-callback", { type: "accepted", callId: customerResult.callId, error: customerResult.error, skipped: customerResult.skipped });
+    job.customerCallbacks.push({ type: "accepted", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
+    await sendSlackMessage(config, `*Late tech accept* — ${contact.name} accepted job ${job.id} after exhaustion.`);
+    await saveJobs(jobs);
+    return true;
+  }
+
+  return false;
+}
+
 function appendTimeline(job, type, payload = {}, actor = "system") {
   const event = {
     id: `evt_${randomUUID()}`,
@@ -852,14 +897,28 @@ async function callCustomerUpdate(config, job, updateType, techName, etaMinutes)
 
   log("customer-callback-start", { jobId: job.id, updateType, customerPhone, techName: techName || null });
 
+  const businessName = config.workspace?.businessName || "Viking Refrigeration";
+  const etaText = etaMinutes ? ` They should be there in about ${etaMinutes} minutes.` : "";
+  const templateValues = { ...getTemplateValues(job), businessName, techName: techName || "a technician", etaMinutes: etaMinutes || "30 to 45", etaText };
+
   let firstMessage, systemPrompt;
-  if (updateType === "accepted") {
-    const eta = etaMinutes ? ` They should be there in about ${etaMinutes} minutes.` : "";
-    firstMessage = `Hi ${job.callerName || "there"}, this is Viking Refrigeration calling back about your ${job.issueType || "service"} emergency. Good news — we've got a tech heading your way.${eta} They'll call you when they're close. Is there anything else you need before they arrive?`;
-    systemPrompt = `You are a callback agent for Viking Refrigeration. You just informed the customer that a tech has been dispatched. Answer any simple questions briefly. If they ask about pricing, say the tech can discuss that on site. If they ask for an ETA, say approximately ${etaMinutes || "30 to 45"} minutes. Keep it short and friendly. Once they confirm they're good, say "Great, sit tight and the tech will be there soon. Have a good night." and end the call.`;
+  if (updateType === "initial") {
+    const scriptTemplate = config.voiceScripts?.customerInitial;
+    firstMessage = scriptTemplate ? renderTemplate(scriptTemplate, templateValues) : `Hi ${job.callerName || "there"}, this is ${businessName}. We received your request about the ${job.issueType || "service"} issue and we're reaching out to our on-call team right now. Someone should be calling you back shortly to confirm the plan.`;
+    systemPrompt = `You are a callback agent for ${businessName}. You just informed the customer that their request has been received and the on-call team is being contacted. Answer simple questions briefly. Don't promise an ETA or a specific tech. If they ask who is coming, say "We're reaching out to the team now and will call you back as soon as we have confirmation." Keep it short and friendly. Once they confirm, say "Great, sit tight and we'll be in touch shortly." and end the call.`;
+  } else if (updateType === "accepted" || updateType === "sub_cancelled_tech_assigned") {
+    const scriptKey = updateType === "sub_cancelled_tech_assigned" ? "customerSubCancelledTechAssigned" : "customerAccepted";
+    const scriptTemplate = config.voiceScripts?.[scriptKey];
+    firstMessage = scriptTemplate ? renderTemplate(scriptTemplate, templateValues) : `Hi ${job.callerName || "there"}, this is ${businessName} calling back about your ${job.issueType || "service"} emergency. Good news — we've got a tech heading your way.${etaText} They'll call you when they're close. Is there anything else you need before they arrive?`;
+    systemPrompt = `You are a callback agent for ${businessName}. You just informed the customer that a tech has been dispatched. Answer any simple questions briefly. If they ask about pricing, say the tech can discuss that on site. If they ask for an ETA, say approximately ${etaMinutes || "30 to 45"} minutes. Keep it short and friendly. Once they confirm they're good, say "Great, sit tight and the tech will be there soon. Have a good night." and end the call.`;
+  } else if (updateType === "sub_dispatched") {
+    const scriptTemplate = config.voiceScripts?.customerSubDispatched;
+    firstMessage = scriptTemplate ? renderTemplate(scriptTemplate, templateValues) : `Hi ${job.callerName || "there"}, this is ${businessName} calling back. We've arranged a service partner to assist you tonight with your ${job.issueType || "service"} issue. They should be reaching out to you shortly.`;
+    systemPrompt = `You are a callback agent for ${businessName}. You just informed the customer that a service partner has been arranged. Answer simple questions briefly. If they ask who exactly is coming, say "One of our service partners — they'll be in touch with you directly." If they ask about cost, say "The partner can discuss that when they arrive." Keep it short. Once they confirm, end the call.`;
   } else {
-    firstMessage = `Hi ${job.callerName || "there"}, this is Viking Refrigeration calling back about your ${job.issueType || "service"} request. Unfortunately we weren't able to reach any of our on-call techs tonight. If this is still urgent, you can call our direct line at 587-809-6383. We really apologize for the inconvenience.`;
-    systemPrompt = `You are a callback agent for Viking Refrigeration. You just informed the customer that no technician is available tonight. Be empathetic and apologetic. If they're upset, acknowledge it. Remind them they can call 587-809-6383 for the direct line, or call back when the office opens at 8 AM. Keep it brief. Once they acknowledge, say "Again, we're sorry about this. Stay safe tonight." and end the call.`;
+    const scriptTemplate = config.voiceScripts?.customerUnavailable;
+    firstMessage = scriptTemplate ? renderTemplate(scriptTemplate, templateValues) : `Hi ${job.callerName || "there"}, this is ${businessName} calling back about your ${job.issueType || "service"} request. Unfortunately we weren't able to reach any of our on-call techs tonight. If this is still urgent, you can call our direct line at 587-809-6383. We really apologize for the inconvenience.`;
+    systemPrompt = `You are a callback agent for ${businessName}. You just informed the customer that no technician is available tonight. Be empathetic and apologetic. If they're upset, acknowledge it. Remind them they can call 587-809-6383 for the direct line, or call back when the office opens at 8 AM. Keep it brief. Once they acknowledge, say "Again, we're sorry about this. Stay safe tonight." and end the call.`;
   }
 
   const response = await fetch(`${baseUrl || "https://api.vapi.ai"}/call`, {
@@ -1296,6 +1355,19 @@ async function handleApi(req, res, pathname) {
     // accepted
     const contact = (config.contacts || []).find((item) => item.id === args.contactId);
     log("job-accepted", { source: "vapi", jobId: job.id, contactId: args.contactId, contactName: contact?.name || args.contactId, etaMinutes: args.etaMinutes });
+
+    // Handle late accepts (provisional sub or exhausted state)
+    if (job.state === STATES.PROVISIONAL_SUB_ASSIGNMENT || job.state === STATES.UNABLE_TO_DISPATCH) {
+      const handled = await handleLateAccept(job, config, contact || { id: args.contactId, name: args.contactId }, jobs);
+      if (handled) {
+        job.acceptedBy = { contactId: normalizeString(args.contactId), contactName: contact?.name || "", channel: "call", at: new Date().toISOString(), etaMinutes: args.etaMinutes || null, notes: normalizeString(args.notes) };
+        await saveJobs(jobs);
+        const result = { success: true, status: "accepted" };
+        if (toolCall?.id) return sendJson(res, 200, { results: [{ toolCallId: toolCall.id, result: JSON.stringify(result) }] });
+        return sendJson(res, 200, result);
+      }
+    }
+
     transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: args.contactId });
     job.acceptedBy = {
       contactId: normalizeString(args.contactId),
@@ -1311,9 +1383,9 @@ async function handleApi(req, res, pathname) {
     const acknowledgement = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(job, contact));
     try { await sendSlackMessage(config, acknowledgement); } catch {}
 
-    // Call the customer to let them know a tech is on the way
     const customerCallResult = await callCustomerUpdate(config, job, "accepted", contact?.name || "a technician", args.etaMinutes);
     appendTimeline(job, "customer-callback", { type: "accepted", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
+    job.customerCallbacks.push({ type: "accepted", at: new Date().toISOString(), outcome: customerCallResult.ok ? "completed" : "failed", callId: customerCallResult.callId, error: customerCallResult.error || null });
     await saveJobs(jobs);
 
     const result = { success: true, status: "accepted" };
@@ -1471,10 +1543,11 @@ async function handleApi(req, res, pathname) {
     log("sms-contact-matched", { from, contactId: contact.id, contactName: contact.name });
 
     // Find the most recent open job this contact was dispatched to
-    const openJobs = jobs.filter((j) => j.status === "open");
-    const matchedJob = openJobs.find((j) =>
+    // Find open, provisional, or exhausted jobs this contact was dispatched to
+    const activeJobs = jobs.filter((j) => getJobStatus(j) === "open" || j.state === STATES.PROVISIONAL_SUB_ASSIGNMENT || j.state === STATES.UNABLE_TO_DISPATCH);
+    const matchedJob = activeJobs.find((j) =>
       (j.attempts || []).some((a) => a.contactId === contact.id)
-    );
+    ) || activeJobs.find((j) => j.provisionalSubId === contact.id);
 
     if (!matchedJob) {
       log("sms-no-open-job", { contactId: contact.id });
@@ -1484,6 +1557,20 @@ async function handleApi(req, res, pathname) {
 
     if (isAccept) {
       log("job-accepted", { source: "sms", jobId: matchedJob.id, contactId: contact.id, contactName: contact.name });
+
+      // Handle late accepts
+      if (matchedJob.state === STATES.PROVISIONAL_SUB_ASSIGNMENT || matchedJob.state === STATES.UNABLE_TO_DISPATCH) {
+        const handled = await handleLateAccept(matchedJob, config, contact, jobs);
+        if (handled) {
+          matchedJob.acceptedBy = { contactId: contact.id, contactName: contact.name, channel: "sms", at: new Date().toISOString() };
+          await saveJobs(jobs);
+          const ackText = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(matchedJob, contact));
+          await sendTwilioSms(config, from, ackText);
+          res.writeHead(200, { "Content-Type": "text/xml" });
+          return res.end(`<Response><Message>${ackText}</Message></Response>`);
+        }
+      }
+
       transitionState(matchedJob, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: contact.id });
       matchedJob.acceptedBy = {
         contactId: contact.id,
