@@ -38,12 +38,16 @@ const STATES = Object.freeze({
   CLOSED: "CLOSED"
 });
 
+// All AWAITING_* states can transition to any other AWAITING_* state (sequence is configurable),
+// to DISPATCH_CONFIRMED_INTERNAL (accepted), or to UNABLE_TO_DISPATCH (exhausted).
+const AWAITING_STATES = [STATES.AWAITING_TECH1_RESPONSE, STATES.AWAITING_TECH2_RESPONSE, STATES.AWAITING_TECH1_FINAL_RETRY, STATES.AWAITING_SUBCONTRACTOR_RESPONSE];
+const FROM_AWAITING = [...AWAITING_STATES, STATES.DISPATCH_CONFIRMED_INTERNAL, STATES.UNABLE_TO_DISPATCH, STATES.PROVISIONAL_SUB_ASSIGNMENT];
 const ALLOWED_TRANSITIONS = {
-  [STATES.OPEN_PENDING_DISPATCH]: [STATES.AWAITING_TECH1_RESPONSE],
-  [STATES.AWAITING_TECH1_RESPONSE]: [STATES.AWAITING_TECH2_RESPONSE, STATES.DISPATCH_CONFIRMED_INTERNAL],
-  [STATES.AWAITING_TECH2_RESPONSE]: [STATES.AWAITING_TECH1_FINAL_RETRY, STATES.DISPATCH_CONFIRMED_INTERNAL],
-  [STATES.AWAITING_TECH1_FINAL_RETRY]: [STATES.AWAITING_SUBCONTRACTOR_RESPONSE, STATES.DISPATCH_CONFIRMED_INTERNAL],
-  [STATES.AWAITING_SUBCONTRACTOR_RESPONSE]: [STATES.PROVISIONAL_SUB_ASSIGNMENT, STATES.UNABLE_TO_DISPATCH],
+  [STATES.OPEN_PENDING_DISPATCH]: [...AWAITING_STATES, STATES.UNABLE_TO_DISPATCH],
+  [STATES.AWAITING_TECH1_RESPONSE]: FROM_AWAITING,
+  [STATES.AWAITING_TECH2_RESPONSE]: FROM_AWAITING,
+  [STATES.AWAITING_TECH1_FINAL_RETRY]: FROM_AWAITING,
+  [STATES.AWAITING_SUBCONTRACTOR_RESPONSE]: FROM_AWAITING,
   [STATES.PROVISIONAL_SUB_ASSIGNMENT]: [STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, STATES.CANCEL_SUBCONTRACTOR_PENDING, STATES.DISPATCH_CONFIRMED_INTERNAL],
   [STATES.CANCEL_SUBCONTRACTOR_PENDING]: [STATES.DISPATCH_CONFIRMED_INTERNAL],
   [STATES.DISPATCH_CONFIRMED_INTERNAL]: [STATES.CLOSED],
@@ -597,7 +601,7 @@ async function advanceEscalation(job, config, jobs) {
     transitionState(job, STATES.UNABLE_TO_DISPATCH);
     const customerResult = await callCustomerUpdate(config, job, "unavailable");
     appendTimeline(job, "customer-callback", { type: "unavailable", callId: customerResult.callId, error: customerResult.error, skipped: customerResult.skipped });
-    job.customerCallbacks.push({ type: "unavailable", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
+    (job.customerCallbacks = job.customerCallbacks || []).push({ type: "unavailable", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
     await sendSlackMessage(config, `*Escalation exhausted* for job ${job.id} — no more contacts available.`);
     clearEscalation(job.id);
     await saveJobs(jobs);
@@ -660,7 +664,7 @@ async function handleLateAccept(job, config, contact, jobs) {
     transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: contact.id });
     const customerResult = await callCustomerUpdate(config, job, "sub_cancelled_tech_assigned", contact.name);
     appendTimeline(job, "customer-callback", { type: "sub_cancelled_tech_assigned", callId: customerResult.callId, error: customerResult.error, skipped: customerResult.skipped });
-    job.customerCallbacks.push({ type: "sub_cancelled_tech_assigned", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
+    (job.customerCallbacks = job.customerCallbacks || []).push({ type: "sub_cancelled_tech_assigned", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
     clearEscalation(job.id);
     await saveJobs(jobs);
     return true;
@@ -672,7 +676,7 @@ async function handleLateAccept(job, config, contact, jobs) {
     transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: contact.id });
     const customerResult = await callCustomerUpdate(config, job, "accepted", contact.name);
     appendTimeline(job, "customer-callback", { type: "accepted", callId: customerResult.callId, error: customerResult.error, skipped: customerResult.skipped });
-    job.customerCallbacks.push({ type: "accepted", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
+    (job.customerCallbacks = job.customerCallbacks || []).push({ type: "accepted", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
     await sendSlackMessage(config, `*Late tech accept* — ${contact.name} accepted job ${job.id} after exhaustion.`);
     await saveJobs(jobs);
     return true;
@@ -958,8 +962,8 @@ async function dispatchBatch(job, batch, config) {
       continue;
     }
 
-    // Send SMS if enabled
-    if (batch.strategy.sendSms && contact.renderedSms) {
+    // Send SMS if enabled (default to true)
+    if (batch.strategy.sendSms !== false && contact.renderedSms) {
       const smsResult = await sendTwilioSms(config, phone, contact.renderedSms);
       const attempt = {
         id: `attempt_${randomUUID()}`,
@@ -1312,7 +1316,7 @@ async function handleApi(req, res, pathname) {
 
     const customerCallResult = await callCustomerUpdate(config, job, "accepted", contact?.name || "a technician", args.etaMinutes);
     appendTimeline(job, "customer-callback", { type: "accepted", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
-    job.customerCallbacks.push({ type: "accepted", at: new Date().toISOString(), outcome: customerCallResult.ok ? "completed" : "failed", callId: customerCallResult.callId, error: customerCallResult.error || null });
+    (job.customerCallbacks = job.customerCallbacks || []).push({ type: "accepted", at: new Date().toISOString(), outcome: customerCallResult.ok ? "completed" : "failed", callId: customerCallResult.callId, error: customerCallResult.error || null });
     await saveJobs(jobs);
 
     const result = { success: true, status: "accepted" };
@@ -1339,7 +1343,6 @@ async function handleApi(req, res, pathname) {
 
     log("sms-contact-matched", { from, contactId: contact.id, contactName: contact.name });
 
-    // Find the most recent open job this contact was dispatched to
     // Find open, provisional, or exhausted jobs this contact was dispatched to
     const activeJobs = jobs.filter((j) => getJobStatus(j) === "open" || j.state === STATES.PROVISIONAL_SUB_ASSIGNMENT || j.state === STATES.UNABLE_TO_DISPATCH);
     const matchedJob = activeJobs.find((j) =>
@@ -1438,8 +1441,13 @@ async function handleApi(req, res, pathname) {
           attempt.status = callStatus === "ended" || callStatus === "completed" ? "answered" : (callStatus || "no-answer");
         }
         // If call ended without acceptance and job is still open, advance escalation
+        // But only if the dispatch agent didn't already report a response (accept/decline)
+        // during this call — check if there's a recent accept/decline attempt for this contact
+        const hasRecentResponse = (job.attempts || []).some((a) =>
+          a.contactId === contactId && (a.status === "accepted" || a.status === "declined")
+        );
         const noAnswer = !["ended", "completed"].includes(callStatus);
-        if (noAnswer && getJobStatus(job) === "open") {
+        if (noAnswer && !hasRecentResponse && getJobStatus(job) === "open") {
           log("call-no-answer-advance", { jobId, contactId, callStatus });
           await advanceEscalation(job, config, jobs);
         } else {
