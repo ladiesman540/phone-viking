@@ -2,10 +2,11 @@
   "name": "phone-viking",
   "version": "0.1.0",
   "private": true,
-  "description": "Dispatch dashboard and Millis function server for phone-based service routing.",
+  "description": "Dispatch dashboard and Vapi/Twilio webhook server for phone-based service routing.",
   "scripts": {
     "start": "node --env-file=.env server.js",
-    "dev": "node --env-file=.env --watch server.js"
+    "dev": "node --env-file=.env --watch server.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2"

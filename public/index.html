@@ -31,7 +31,7 @@
         <div class="tab-panel active" data-tab="jobs">
           <div class="tab-intro">
             <h2>Jobs</h2>
-            <p>Every time a caller reaches the system, a job gets created here. You can see who called, what they need, which routing rule matched, and whether a tech has accepted the job. This is your day-to-day view.</p>
+            <p>Every time a caller reaches the system, a job gets created here. You can see who called, what they need, which routing rule matched, where the escalation timer is, and whether a tech has accepted the job. This is your day-to-day view.</p>
           </div>
           <div class="tab-stack">
             <section class="panel">
@@ -159,7 +159,7 @@
                   <span>Acceptance confirmation — sent back to the caller when a tech accepts the job</span>
                   <textarea data-path="messageTemplates.acceptanceAck" rows="4"></textarea>
                 </label>
-                <p class="hint">Available tokens: <code>{{jobId}}</code>, <code>{{callerName}}</code>, <code>{{callbackNumber}}</code>, <code>{{serviceAddress}}</code>, <code>{{locationArea}}</code>, <code>{{issueType}}</code>, <code>{{urgency}}</code>, <code>{{summary}}</code></p>
+                <p class="hint">Available tokens: <code>{{jobId}}</code>, <code>{{callerName}}</code>, <code>{{callbackNumber}}</code>, <code>{{serviceAddress}}</code>, <code>{{locationArea}}</code>, <code>{{issueType}}</code>, <code>{{urgency}}</code>, <code>{{summary}}</code>, <code>{{businessName}}</code>, <code>{{contactName}}</code></p>
               </div>
             </section>
 
@@ -180,7 +180,7 @@
         <div class="tab-panel" data-tab="setup">
           <div class="tab-intro">
             <h2>Setup</h2>
-            <p>Connect the services that make Phone Viking work. The system needs three things: <strong>Twilio</strong> to make phone calls and send texts, <strong>Millis</strong> to power the AI voice agent that answers calls, and <strong>Slack</strong> to notify your team. Set these up once and you shouldn't need to touch them again.</p>
+            <p>Connect the services that make Phone Viking work. The system needs three things: <strong>Twilio</strong> to make phone calls and send texts, <strong>Vapi</strong> to power the AI voice agents, and <strong>Slack</strong> to notify your team. Set these up once and you shouldn't need to touch them again.</p>
           </div>
           <div class="tab-stack">
             <section class="panel">
@@ -222,7 +222,7 @@
                   <h2>Phone Calls and Texts</h2>
                 </div>
               </div>
-              <p class="section-desc">Twilio is how the system makes outbound calls to techs and sends SMS messages. You need two phone numbers from your Twilio account — one for voice calls, one for texts (they can be the same number). Your Twilio Account SID and Auth Token are read from environment variables (<code>TWILIO_ACCOUNT_SID</code> and <code>TWILIO_AUTH_TOKEN</code>) — they don't go here.</p>
+              <p class="section-desc">Twilio is how the system makes outbound calls to techs and sends SMS messages. You need two phone numbers from your Twilio account — one for voice calls, one for texts (they can be the same number). Sensitive fields render blank after refresh; leaving them blank on save preserves the stored values.</p>
               <div class="form-grid">
                 <label>
                   <span>Voice number — the Twilio number that makes outbound calls to techs</span>
@@ -232,29 +232,37 @@
                   <span>SMS number — the Twilio number that sends dispatch texts</span>
                   <input data-path="twilio.smsNumber" type="text" placeholder="+1..." />
                 </label>
+                <label>
+                  <span>Account SID</span>
+                  <input data-path="twilio.accountSid" type="text" placeholder="leave blank to preserve" />
+                </label>
+                <label>
+                  <span>Auth token</span>
+                  <input data-path="twilio.authToken" type="password" placeholder="leave blank to preserve" />
+                </label>
               </div>
             </section>
 
             <section class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Millis AI</p>
+                  <p class="eyebrow">Vapi</p>
                   <h2>Voice Agent</h2>
                 </div>
               </div>
-              <p class="section-desc">Millis powers the AI agent that answers incoming calls, talks to the caller, and collects the info needed to create a job. You need two agents configured in Millis: an <strong>intake agent</strong> (answers the phone, asks questions) and a <strong>dispatch agent</strong> (calls techs to offer them the job). The API key authenticates with Millis — get it from your Millis dashboard.</p>
+              <p class="section-desc">Vapi powers the AI voice agents. This dashboard stores the outbound dispatch assistant configuration used to call techs and callers back. Sensitive fields render blank after refresh; leaving them blank on save preserves the stored values.</p>
               <div class="form-grid">
                 <label>
-                  <span>Intake agent ID — the agent that answers incoming calls</span>
-                  <input data-path="millis.intakeAgentId" type="text" />
+                  <span>Dispatch assistant ID</span>
+                  <input data-path="vapi.dispatchAssistantId" type="text" />
                 </label>
                 <label>
-                  <span>Dispatch agent ID — the agent that calls techs to offer jobs</span>
-                  <input data-path="millis.dispatchAgentId" type="text" />
+                  <span>Phone number ID</span>
+                  <input data-path="vapi.phoneNumberId" type="text" />
                 </label>
                 <label class="wide">
-                  <span>API key — from your Millis dashboard</span>
-                  <input data-path="millis.apiKey" type="password" />
+                  <span>API key</span>
+                  <input data-path="vapi.apiKey" type="password" placeholder="leave blank to preserve" />
                 </label>
               </div>
             </section>
@@ -266,11 +274,19 @@
                   <h2>Team Notifications</h2>
                 </div>
               </div>
-              <p class="section-desc">When a new job comes in, the system posts a summary to a Slack channel so your team can see it in real time. Create an <strong>Incoming Webhook</strong> in your Slack workspace settings and paste the URL here.</p>
+              <p class="section-desc">When a new job comes in, the system posts a summary to Slack so your team can see it in real time. You can use either an incoming webhook or a bot token plus channel ID. Sensitive fields render blank after refresh; leaving them blank on save preserves the stored values.</p>
               <div class="form-grid">
                 <label class="wide">
-                  <span>Webhook URL — from Slack > Apps > Incoming Webhooks</span>
-                  <input data-path="slack.webhookUrl" type="text" placeholder="https://hooks.slack.com/..." />
+                  <span>Webhook URL</span>
+                  <input data-path="slack.webhookUrl" type="text" placeholder="leave blank to preserve" />
+                </label>
+                <label>
+                  <span>Bot token</span>
+                  <input data-path="slack.botToken" type="password" placeholder="leave blank to preserve" />
+                </label>
+                <label>
+                  <span>Channel ID</span>
+                  <input data-path="slack.channelId" type="text" placeholder="C..." />
                 </label>
                 <label>
                   <span>Channel label — just for display, e.g. #dispatch</span>
@@ -371,6 +387,14 @@
             <input data-prop="active" type="checkbox" />
             <span>Active</span>
           </label>
+          <label class="checkbox">
+            <input data-prop="doNotUse" type="checkbox" />
+            <span>Do not use</span>
+          </label>
+          <label class="checkbox">
+            <input data-prop="mayReplaceSubcontractor" type="checkbox" />
+            <span>May replace subcontractor</span>
+          </label>
         </div>
       </article>
     </template>
@@ -433,6 +457,10 @@
             <span>Escalate after (minutes)</span>
             <input data-prop="strategy.escalateAfterMinutes" type="number" min="1" />
           </label>
+          <label>
+            <span>Sub replacement window (minutes)</span>
+            <input data-prop="strategy.subReplacementWindowMinutes" type="number" min="1" />
+          </label>
           <label class="checkbox">
             <input data-prop="strategy.leaveVoicemail" type="checkbox" />
             <span>Leave voicemail</span>
@@ -448,6 +476,10 @@
           <label class="wide">
             <span>Target contacts</span>
             <div class="contact-targets" data-role="targets"></div>
+          </label>
+          <label class="wide">
+            <span>Escalation sequence JSON</span>
+            <textarea data-prop="strategy.escalationSequenceJson" rows="8" placeholder='[{"contactId":"contact_test_tech","partner":false}]'></textarea>
           </label>
         </div>
       </article>

@@ -1,6 +1,6 @@
 {
   "workspace": {
-    "businessName": "Viking Refrigeration",
+    "businessName": "Test Viking Co",
     "timezone": "America/Edmonton",
     "businessHours": {
       "days": [
@@ -11,12 +11,14 @@
         "fri"
       ],
       "startHour": 8,
-      "endHour": 17
+      "endHour": 18
     }
   },
   "slack": {
     "enabled": true,
     "webhookUrl": "",
+    "botToken": "",
+    "channelId": "",
     "channelLabel": "#dispatch"
   },
   "twilio": {
@@ -25,19 +27,31 @@
     "accountSid": "",
     "authToken": ""
   },
-  "millis": {
-    "apiKey": "",
-    "publicKey": "",
-    "intakeAgentId": "-Oni4tDdIrhvby82tA4L",
-    "dispatchAgentId": "-OnrsTYAR6nHM7WaIYip",
-    "baseUrl": "https://api-west.millis.ai",
-    "outboundNumber": "+15878753851"
-  },
   "vapi": {
+    "baseUrl": "https://api.vapi.ai",
     "apiKey": "",
     "dispatchAssistantId": "0d5390f4-bd9e-46b6-9770-517f9b117cf6",
-    "phoneNumberId": "da19fba6-7009-4f12-8271-b45815b9d697",
-    "baseUrl": "https://api.vapi.ai"
+    "phoneNumberId": "da19fba6-7009-4f12-8271-b45815b9d697"
+  },
+  "voiceScripts": {
+    "customerInitial": "Hi {{callerName}}, this is {{businessName}}. We received your request about the {{issueType}} issue and we're reaching out to our on-call team right now. Someone should be calling you back shortly.",
+    "customerAccepted": "Hi {{callerName}}, this is {{businessName}} calling back about your {{issueType}} emergency. Good news — we've got a tech heading your way.{{etaText}} They'll call you when they're close. Is there anything else you need before they arrive?",
+    "customerSubDispatched": "Hi {{callerName}}, this is {{businessName}} calling back. We've arranged a service partner to assist you tonight with your {{issueType}} issue. They should be reaching out to you shortly.",
+    "customerUnavailable": "Hi {{callerName}}, this is {{businessName}} calling back about your {{issueType}} request. Unfortunately we weren't able to reach any of our on-call techs tonight. If this is still urgent, you can call our direct line at 587-809-6383. We really apologize for the inconvenience.",
+    "customerSubCancelledTechAssigned": "Hi {{callerName}}, this is {{businessName}} with an update. Good news — one of our own techs is now heading your way for your {{issueType}} issue.{{etaText}} They'll call you when they're close.",
+    "subCancellation": "Hi, this is {{businessName}} dispatch. We had a service request we'd reached out about, but one of our techs is now available to cover it. You're off the hook — sorry for the back and forth."
+  },
+  "humanReview": {
+    "enabled": true,
+    "triggerOnAmbiguousResponse": true,
+    "triggerOnConflictingAcceptances": true,
+    "triggerOnSafetyRisk": true,
+    "triggerOnPricingIssue": true,
+    "slackNotify": true
+  },
+  "escalation": {
+    "defaultTimerMinutes": 3,
+    "subReplacementWindowMinutes": 10
   },
   "intakeFields": [
     {
@@ -101,7 +115,8 @@
     "slackSummary": "<!channel> *New dispatch request*\nCustomer: {{callerName}}\nCallback: {{callbackNumber}}\nLocation: {{locationArea}}\nIssue: {{issueType}}\nUrgency: {{urgency}}\nSummary: {{summary}}\nJob ID: {{jobId}}",
     "techSms": "Dispatch request {{jobId}}: {{issueType}} at {{locationArea}}. {{summary}} Reply YES if you can take it, NO if not.",
     "partnerSms": "Partner request {{jobId}}: {{issueType}} at {{locationArea}}. {{summary}} Reply YES if available.",
-    "acceptanceAck": "Confirmed. {{contactName}} has accepted job {{jobId}}."
+    "acceptanceAck": "Confirmed. {{contactName}} has accepted job {{jobId}}.",
+    "subcontractorSms": "Service partner request {{jobId}}: {{issueType}} at {{locationArea}}. Please call back to confirm availability."
   },
   "contacts": [
     {
@@ -115,7 +130,11 @@
       "serviceAreas": [],
       "availability": "24/7",
       "notes": "Test contact for simulation",
-      "active": true
+      "active": true,
+      "doNotUse": false,
+      "mayReplaceSubcontractor": true,
+      "blackoutPeriods": [],
+      "tempOverrides": {}
     }
   ],
   "routingRules": [
@@ -145,7 +164,9 @@
         "escalateAfterMinutes": 5,
         "leaveVoicemail": false,
         "sendSms": true,
-        "notifySlackOnEscalation": true
+        "notifySlackOnEscalation": true,
+        "subReplacementWindowMinutes": 10,
+        "escalationSequence": []
       },
       "targetContactIds": [
         "contact_test_tech"
@@ -173,11 +194,21 @@
         "escalateAfterMinutes": 5,
         "leaveVoicemail": false,
         "sendSms": true,
-        "notifySlackOnEscalation": true
+        "notifySlackOnEscalation": true,
+        "subReplacementWindowMinutes": 10,
+        "escalationSequence": []
       },
       "targetContactIds": [
         "contact_test_tech"
       ]
     }
-  ]
+  ],
+  "millis": {
+    "apiKey": "",
+    "publicKey": "",
+    "intakeAgentId": "-Oni4tDdIrhvby82tA4L",
+    "dispatchAgentId": "-OnrsTYAR6nHM7WaIYip",
+    "baseUrl": "https://api-west.millis.ai",
+    "outboundNumber": "+15878753851"
+  }
 }

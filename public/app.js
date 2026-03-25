@@ -164,7 +164,11 @@ function createContactCard(contact, index) {
     }
 
     if (input.type === "checkbox") {
-      input.checked = value !== false;
+      if (prop === "active" || prop === "mayReplaceSubcontractor") {
+        input.checked = value !== false;
+      } else {
+        input.checked = Boolean(value);
+      }
     } else {
       input.value = value ?? "";
     }
@@ -253,6 +257,9 @@ function createRuleCard(rule, index) {
     if (prop === "conditions.contactTypesCsv") {
       value = (rule.conditions.contactTypes || []).join(",");
     }
+    if (prop === "strategy.escalationSequenceJson") {
+      value = JSON.stringify(rule.strategy.escalationSequence || [], null, 2);
+    }
 
     if (input.type === "checkbox") {
       input.checked = Boolean(value);
@@ -276,6 +283,13 @@ function createRuleCard(rule, index) {
         rule.conditions.areas = normalizeCsv(nextValue);
       } else if (prop === "conditions.contactTypesCsv") {
         rule.conditions.contactTypes = normalizeCsv(nextValue);
+      } else if (prop === "strategy.escalationSequenceJson") {
+        try {
+          rule.strategy.escalationSequence = JSON.parse(nextValue || "[]");
+          input.setCustomValidity("");
+        } catch {
+          input.setCustomValidity("Invalid JSON");
+        }
       } else {
         deepSet(rule, prop, nextValue);
       }
@@ -313,7 +327,10 @@ function renderRoutingRules() {
 
 function renderJobs() {
   if (!state.jobs.length) {
-    elements.jobs.innerHTML = '<p class="hint">No jobs yet. Use the simulator or the Millis create_job function to create one.</p>';
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "No jobs yet. Use the simulator or the voice-agent create-job function to create one.";
+    elements.jobs.replaceChildren(hint);
     return;
   }
 
@@ -326,19 +343,43 @@ function renderJobs() {
       .map((attempt) => `${attempt.channel}:${attempt.status}:${attempt.contactId}`)
       .join(" | ");
 
-    article.innerHTML = `
-      <div class="job-head">
-        <div>
-          <p class="eyebrow">${job.status}</p>
-          <h3>${job.issueType || "Unspecified issue"} · ${job.locationArea || "Unknown area"}</h3>
-        </div>
-        <span>${new Date(job.createdAt).toLocaleString()}</span>
-      </div>
-      <p>${job.summary || "No summary"}</p>
-      <p class="job-meta">Caller: ${job.callerName || "-"} · Callback: ${job.callbackNumber || "-"} · Rule: ${job.matchedRuleId || "none"}</p>
-      <p class="job-meta">${acceptedBy}</p>
-      <p class="job-meta">Recent attempts: ${attempts || "none"}</p>
-    `;
+    const head = document.createElement("div");
+    head.className = "job-head";
+
+    const headLeft = document.createElement("div");
+    const eyebrow = document.createElement("p");
+    eyebrow.className = "eyebrow";
+    eyebrow.textContent = job.state || job.status || "open";
+    const title = document.createElement("h3");
+    title.textContent = `${job.issueType || "Unspecified issue"} · ${job.locationArea || "Unknown area"}`;
+    headLeft.append(eyebrow, title);
+
+    const timestamp = document.createElement("span");
+    timestamp.textContent = new Date(job.createdAt).toLocaleString();
+    head.append(headLeft, timestamp);
+
+    const summary = document.createElement("p");
+    summary.textContent = job.summary || "No summary";
+
+    const callerMeta = document.createElement("p");
+    callerMeta.className = "job-meta";
+    callerMeta.textContent = `Caller: ${job.callerName || "-"} · Callback: ${job.callbackNumber || "-"} · Rule: ${job.matchedRuleId || "none"}`;
+
+    const acceptedMeta = document.createElement("p");
+    acceptedMeta.className = "job-meta";
+    acceptedMeta.textContent = acceptedBy;
+
+    const attemptsMeta = document.createElement("p");
+    attemptsMeta.className = "job-meta";
+    attemptsMeta.textContent = `Recent attempts: ${attempts || "none"}`;
+
+    const escalationMeta = document.createElement("p");
+    escalationMeta.className = "job-meta";
+    escalationMeta.textContent = job.escalationDueAt
+      ? `Next escalation: ${new Date(job.escalationDueAt).toLocaleString()}`
+      : "Next escalation: none";
+
+    article.append(head, summary, callerMeta, acceptedMeta, attemptsMeta, escalationMeta);
     return article;
   });
 
@@ -376,6 +417,7 @@ async function loadAll() {
 async function saveConfig() {
   setSaveStatus("Saving dashboard...", "busy");
   state.config.contacts = state.config.contacts.map((contact, index) => ({
+    ...contact,
     id: contact.id || `contact_${slugify(contact.name || `contact_${index + 1}`)}`,
     name: contact.name || "",
     company: contact.company || "",
@@ -386,15 +428,19 @@ async function saveConfig() {
     serviceAreas: contact.serviceAreas || [],
     availability: contact.availability || "",
     notes: contact.notes || "",
-    active: contact.active !== false
+    active: contact.active !== false,
+    doNotUse: Boolean(contact.doNotUse),
+    mayReplaceSubcontractor: contact.mayReplaceSubcontractor !== false
   }));
 
   state.config.routingRules = state.config.routingRules.map((rule, index) => ({
+    ...rule,
     id: rule.id || `rule_${slugify(rule.name || `rule_${index + 1}`)}`,
     name: rule.name || `Rule ${index + 1}`,
     active: rule.active !== false,
     sortOrder: Number(rule.sortOrder || index + 1),
     conditions: {
+      ...(rule.conditions || {}),
       issueTypes: rule.conditions.issueTypes || [],
       urgencies: rule.conditions.urgencies || [],
       areas: rule.conditions.areas || [],
@@ -402,17 +448,21 @@ async function saveConfig() {
       contactTypes: rule.conditions.contactTypes || []
     },
     strategy: {
+      ...(rule.strategy || {}),
       initialTier: Number(rule.strategy.initialTier || 1),
       batchSize: Number(rule.strategy.batchSize || 3),
       escalateAfterMinutes: Number(rule.strategy.escalateAfterMinutes || 5),
+      subReplacementWindowMinutes: Number(rule.strategy.subReplacementWindowMinutes || 10),
       leaveVoicemail: Boolean(rule.strategy.leaveVoicemail),
       sendSms: rule.strategy.sendSms !== false,
-      notifySlackOnEscalation: Boolean(rule.strategy.notifySlackOnEscalation)
+      notifySlackOnEscalation: Boolean(rule.strategy.notifySlackOnEscalation),
+      escalationSequence: Array.isArray(rule.strategy.escalationSequence) ? rule.strategy.escalationSequence : []
     },
     targetContactIds: rule.targetContactIds || []
   }));
 
   state.config.intakeFields = state.config.intakeFields.map((field, index) => ({
+    ...field,
     id: field.id || `field_${index + 1}`,
     label: field.label || `Field ${index + 1}`,
     type: field.type || "text",
@@ -484,7 +534,9 @@ function wireActions() {
       serviceAreas: [],
       availability: "",
       notes: "",
-      active: true
+      active: true,
+      doNotUse: false,
+      mayReplaceSubcontractor: true
     });
     render();
     setSaveStatus("Unsaved changes.", "dirty");
@@ -506,9 +558,11 @@ function wireActions() {
         initialTier: 1,
         batchSize: 3,
         escalateAfterMinutes: 5,
+        subReplacementWindowMinutes: 10,
         leaveVoicemail: false,
         sendSms: true,
-        notifySlackOnEscalation: true
+        notifySlackOnEscalation: true,
+        escalationSequence: []
       },
       targetContactIds: []
     });
