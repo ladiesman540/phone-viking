@@ -297,3 +297,51 @@ test("dashboard auth classification skips webhooks and cron but protects dashboa
     else process.env.DASHBOARD_PASSWORD = originalPassword;
   }
 });
+
+// --- Phase 1 tests ---
+
+test("closeJobIfTerminal transitions confirmed jobs to CLOSED", () => {
+  const job = { state: _internals.STATES.DISPATCH_CONFIRMED_INTERNAL, timeline: [] };
+  const closed = _internals.closeJobIfTerminal(job);
+  assert.equal(closed, true);
+  assert.equal(job.state, _internals.STATES.CLOSED);
+});
+
+test("closeJobIfTerminal does not close open or awaiting jobs", () => {
+  const job1 = { state: _internals.STATES.AWAITING_TECH1_RESPONSE, timeline: [] };
+  assert.equal(_internals.closeJobIfTerminal(job1), false);
+  assert.equal(job1.state, _internals.STATES.AWAITING_TECH1_RESPONSE);
+
+  const job2 = { state: _internals.STATES.OPEN_PENDING_DISPATCH, timeline: [] };
+  assert.equal(_internals.closeJobIfTerminal(job2), false);
+});
+
+test("closeJobIfTerminal closes DISPATCH_CONFIRMED_SUBCONTRACTOR and UNABLE_TO_DISPATCH", () => {
+  const job1 = { state: _internals.STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, timeline: [] };
+  assert.equal(_internals.closeJobIfTerminal(job1), true);
+  assert.equal(job1.state, _internals.STATES.CLOSED);
+
+  const job2 = { state: _internals.STATES.UNABLE_TO_DISPATCH, timeline: [] };
+  assert.equal(_internals.closeJobIfTerminal(job2), true);
+  assert.equal(job2.state, _internals.STATES.CLOSED);
+});
+
+test("transitionState from PROVISIONAL_SUB_ASSIGNMENT to DISPATCH_CONFIRMED_SUBCONTRACTOR is allowed", () => {
+  const job = { state: _internals.STATES.PROVISIONAL_SUB_ASSIGNMENT, timeline: [] };
+  _internals.transitionState(job, _internals.STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, { contactId: "sub_1" });
+  assert.equal(job.state, _internals.STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR);
+  assert.equal(_internals.getJobStatus(job), "accepted");
+});
+
+test("transitionState from PROVISIONAL_SUB_ASSIGNMENT to CANCEL_SUBCONTRACTOR_PENDING is allowed", () => {
+  const job = { state: _internals.STATES.PROVISIONAL_SUB_ASSIGNMENT, timeline: [] };
+  _internals.transitionState(job, _internals.STATES.CANCEL_SUBCONTRACTOR_PENDING, { reason: "tech-override" });
+  assert.equal(job.state, _internals.STATES.CANCEL_SUBCONTRACTOR_PENDING);
+});
+
+test("getJobStatus returns correct status for all terminal and provisional states", () => {
+  assert.equal(_internals.getJobStatus({ state: _internals.STATES.PROVISIONAL_SUB_ASSIGNMENT }), "open");
+  assert.equal(_internals.getJobStatus({ state: _internals.STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR }), "accepted");
+  assert.equal(_internals.getJobStatus({ state: _internals.STATES.CLOSED }), "closed");
+  assert.equal(_internals.getJobStatus({ state: _internals.STATES.UNABLE_TO_DISPATCH }), "closed");
+});

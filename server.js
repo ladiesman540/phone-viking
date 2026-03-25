@@ -347,7 +347,8 @@ const defaultConfig = {
   },
   escalation: {
     defaultTimerMinutes: 3,
-    subReplacementWindowMinutes: 10
+    subReplacementWindowMinutes: 10,
+    autoCloseMinutes: 60
   },
   intakeFields: [
     {
@@ -931,6 +932,12 @@ function stateForStep(step, sequence) {
 }
 
 async function advanceEscalation(job, config, jobs) {
+  // If the timer fired on a provisional sub assignment, finalize instead of advancing
+  if (job.state === STATES.PROVISIONAL_SUB_ASSIGNMENT) {
+    await handleSubReplacementTimeout(job, config, jobs);
+    return;
+  }
+
   job.escalationStep++;
   const target = getEscalationTarget(job, config);
 
@@ -944,6 +951,7 @@ async function advanceEscalation(job, config, jobs) {
     (job.customerCallbacks = job.customerCallbacks || []).push({ type: "unavailable", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
     await sendSlackMessage(config, `*Escalation exhausted* for job ${job.id} — no more contacts available.`);
     clearEscalation(job.id);
+    closeJobIfTerminal(job);
     await saveJobs(jobs);
     return;
   }
@@ -1009,6 +1017,7 @@ async function handleLateAccept(job, config, contact, jobs) {
     appendTimeline(job, "customer-callback", { type: "sub_cancelled_tech_assigned", callId: customerResult.callId, error: customerResult.error, skipped: customerResult.skipped });
     (job.customerCallbacks = job.customerCallbacks || []).push({ type: "sub_cancelled_tech_assigned", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
     clearEscalation(job.id);
+    closeJobIfTerminal(job);
     await saveJobs(jobs);
     return true;
   }
@@ -1023,11 +1032,30 @@ async function handleLateAccept(job, config, contact, jobs) {
     appendTimeline(job, "customer-callback", { type: "accepted", callId: customerResult.callId, error: customerResult.error, skipped: customerResult.skipped });
     (job.customerCallbacks = job.customerCallbacks || []).push({ type: "accepted", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
     await sendSlackMessage(config, `*Late tech accept* — ${contact.name} accepted job ${job.id} after exhaustion.`);
+    closeJobIfTerminal(job);
     await saveJobs(jobs);
     return true;
   }
 
   return false;
+}
+
+async function handleSubReplacementTimeout(job, config, jobs) {
+  log("sub-replacement-timeout", { jobId: job.id, provisionalSubId: job.provisionalSubId });
+  transitionState(job, STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, { contactId: job.provisionalSubId });
+  job.escalationDueAt = null;
+  job.escalationScheduledForStep = null;
+  clearEscalation(job.id);
+  await sendSlackMessage(config, `*Subcontractor confirmed* — provisional assignment finalized for job ${job.id}.`);
+  closeJobIfTerminal(job);
+  await saveJobs(jobs);
+}
+
+function closeJobIfTerminal(job) {
+  const closeable = [STATES.DISPATCH_CONFIRMED_INTERNAL, STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, STATES.UNABLE_TO_DISPATCH];
+  if (!closeable.includes(job.state)) return false;
+  transitionState(job, STATES.CLOSED, { reason: "final-callback-complete" });
+  return true;
 }
 
 async function checkHumanReview(job, config, trigger, context) {
@@ -1900,6 +1928,11 @@ async function handleApi(req, res, pathname) {
       const timerMinutes = Number(rule?.strategy?.escalateAfterMinutes || config.escalation?.defaultTimerMinutes || 3);
       setEscalationDeadline(job, timerMinutes, job.escalationStep);
       scheduleEscalation(job.id, timerMinutes, config, job.escalationStep);
+      // Initial customer callback — "we received your request, team is being contacted"
+      const initialCallResult = await callCustomerUpdate(config, job, "initial");
+      appendTimeline(job, "customer-callback", { type: "initial", callId: initialCallResult.callId, error: initialCallResult.error, skipped: initialCallResult.skipped });
+      (job.customerCallbacks = job.customerCallbacks || []).push({ type: "initial", at: new Date().toISOString(), outcome: initialCallResult.ok ? "completed" : "failed", callId: initialCallResult.callId, error: initialCallResult.error || null });
+
       resultMessage = `Job ${job.id} created. Contacting ${target.contact.name}.`;
     } else {
       log("job-created", { jobId: job.id, matchedRule: job.matchedRuleId || "(none)", firstContact: "(none)" });
@@ -1999,7 +2032,8 @@ async function handleApi(req, res, pathname) {
       }
     }
 
-    transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: args.contactId });
+    const isPartnerAccept = normalizeString(contact?.type).toLowerCase() === "partner";
+
     job.acceptedBy = {
       contactId: normalizeString(args.contactId),
       contactName: contact?.name || "",
@@ -2008,18 +2042,38 @@ async function handleApi(req, res, pathname) {
       etaMinutes: args.etaMinutes || null,
       notes: normalizeString(args.notes)
     };
-    appendTimeline(job, "job-accepted", { ...job.acceptedBy, attemptId: acceptedAttempt.id }, `tech:${args.contactId}`);
-    clearEscalation(job.id);
-    job.escalationDueAt = null;
-    job.escalationScheduledForStep = null;
+    appendTimeline(job, "job-accepted", { ...job.acceptedBy, attemptId: acceptedAttempt.id, isPartner: isPartnerAccept }, `tech:${args.contactId}`);
 
     const acknowledgement = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(job, contact, config));
     try { await sendSlackMessage(config, acknowledgement); } catch {}
 
-    const customerCallResult = await callCustomerUpdate(config, job, "accepted", contact?.name || "a technician", args.etaMinutes);
-    appendTimeline(job, "customer-callback", { type: "accepted", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
-    (job.customerCallbacks = job.customerCallbacks || []).push({ type: "accepted", at: new Date().toISOString(), outcome: customerCallResult.ok ? "completed" : "failed", callId: customerCallResult.callId, error: customerCallResult.error || null });
-    await saveJobs(jobs);
+    if (isPartnerAccept) {
+      // Provisional subcontractor assignment — hold for replacement window
+      transitionState(job, STATES.PROVISIONAL_SUB_ASSIGNMENT, { contactId: args.contactId });
+      job.provisionalSubId = normalizeString(args.contactId);
+      job.provisionalSubAt = new Date().toISOString();
+      const customerCallResult = await callCustomerUpdate(config, job, "sub_dispatched");
+      appendTimeline(job, "customer-callback", { type: "sub_dispatched", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
+      (job.customerCallbacks = job.customerCallbacks || []).push({ type: "sub_dispatched", at: new Date().toISOString(), outcome: customerCallResult.ok ? "completed" : "failed", callId: customerCallResult.callId, error: customerCallResult.error || null });
+
+      const rule = (config.routingRules || []).find((r) => r.id === job.matchedRuleId);
+      const subWindow = Number(rule?.strategy?.subReplacementWindowMinutes || config.escalation?.subReplacementWindowMinutes || 10);
+      setEscalationDeadline(job, subWindow, job.escalationStep);
+      scheduleEscalation(job.id, subWindow, config, job.escalationStep);
+      await saveJobs(jobs);
+    } else {
+      // Internal tech confirmed
+      transitionState(job, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: args.contactId });
+      clearEscalation(job.id);
+      job.escalationDueAt = null;
+      job.escalationScheduledForStep = null;
+
+      const customerCallResult = await callCustomerUpdate(config, job, "accepted", contact?.name || "a technician", args.etaMinutes);
+      appendTimeline(job, "customer-callback", { type: "accepted", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
+      (job.customerCallbacks = job.customerCallbacks || []).push({ type: "accepted", at: new Date().toISOString(), outcome: customerCallResult.ok ? "completed" : "failed", callId: customerCallResult.callId, error: customerCallResult.error || null });
+      closeJobIfTerminal(job);
+      await saveJobs(jobs);
+    }
 
     const result = { success: true, status: "accepted" };
     if (toolCall?.id) return sendJson(res, 200, { results: [{ toolCallId: toolCall.id, result: JSON.stringify(result) }] });
@@ -2099,26 +2153,44 @@ async function handleApi(req, res, pathname) {
         }
       }
 
-      transitionState(matchedJob, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: contact.id });
+      const isPartnerAccept = normalizeString(contact.type).toLowerCase() === "partner";
+
       matchedJob.acceptedBy = {
         contactId: contact.id,
         contactName: contact.name,
         channel: "sms",
         at: new Date().toISOString()
       };
-      appendTimeline(matchedJob, "job-accepted", { ...matchedJob.acceptedBy, attemptId: acceptedAttempt.id }, `tech:${contact.id}`);
-      clearEscalation(matchedJob.id);
-      matchedJob.escalationDueAt = null;
-      matchedJob.escalationScheduledForStep = null;
+      appendTimeline(matchedJob, "job-accepted", { ...matchedJob.acceptedBy, attemptId: acceptedAttempt.id, isPartner: isPartnerAccept }, `tech:${contact.id}`);
 
       const ackText = renderTemplate(config.messageTemplates?.acceptanceAck, getTemplateValues(matchedJob, contact, config));
       try { await sendSlackMessage(config, ackText); } catch {}
 
-      // Call customer to let them know a tech is on the way
-      const customerCallResult = await callCustomerUpdate(config, matchedJob, "accepted", contact.name);
-      appendTimeline(matchedJob, "customer-callback", { type: "accepted", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
-      (matchedJob.customerCallbacks = matchedJob.customerCallbacks || []).push({ type: "accepted", at: new Date().toISOString(), outcome: customerCallResult.ok ? "completed" : "failed", callId: customerCallResult.callId, error: customerCallResult.error || null });
-      await saveJobs(jobs);
+      if (isPartnerAccept) {
+        transitionState(matchedJob, STATES.PROVISIONAL_SUB_ASSIGNMENT, { contactId: contact.id });
+        matchedJob.provisionalSubId = contact.id;
+        matchedJob.provisionalSubAt = new Date().toISOString();
+        const customerCallResult = await callCustomerUpdate(config, matchedJob, "sub_dispatched");
+        appendTimeline(matchedJob, "customer-callback", { type: "sub_dispatched", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
+        (matchedJob.customerCallbacks = matchedJob.customerCallbacks || []).push({ type: "sub_dispatched", at: new Date().toISOString(), outcome: customerCallResult.ok ? "completed" : "failed", callId: customerCallResult.callId, error: customerCallResult.error || null });
+
+        const rule = (config.routingRules || []).find((r) => r.id === matchedJob.matchedRuleId);
+        const subWindow = Number(rule?.strategy?.subReplacementWindowMinutes || config.escalation?.subReplacementWindowMinutes || 10);
+        setEscalationDeadline(matchedJob, subWindow, matchedJob.escalationStep);
+        scheduleEscalation(matchedJob.id, subWindow, config, matchedJob.escalationStep);
+        await saveJobs(jobs);
+      } else {
+        transitionState(matchedJob, STATES.DISPATCH_CONFIRMED_INTERNAL, { contactId: contact.id });
+        clearEscalation(matchedJob.id);
+        matchedJob.escalationDueAt = null;
+        matchedJob.escalationScheduledForStep = null;
+
+        const customerCallResult = await callCustomerUpdate(config, matchedJob, "accepted", contact.name);
+        appendTimeline(matchedJob, "customer-callback", { type: "accepted", callId: customerCallResult.callId, error: customerCallResult.error, skipped: customerCallResult.skipped });
+        (matchedJob.customerCallbacks = matchedJob.customerCallbacks || []).push({ type: "accepted", at: new Date().toISOString(), outcome: customerCallResult.ok ? "completed" : "failed", callId: customerCallResult.callId, error: customerCallResult.error || null });
+        closeJobIfTerminal(matchedJob);
+        await saveJobs(jobs);
+      }
       return sendTwimlMessage(res, ackText);
     }
 
@@ -2213,18 +2285,31 @@ async function handleApi(req, res, pathname) {
         await advanceEscalation(job, config, jobs);
       }
 
-      if (dueJobs.length) {
+      // Auto-close stale confirmed/unable jobs
+      const autoCloseMinutes = Number(config.escalation?.autoCloseMinutes || 60);
+      const closedIds = [];
+      for (const job of jobs) {
+        const closeable = [STATES.DISPATCH_CONFIRMED_INTERNAL, STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, STATES.UNABLE_TO_DISPATCH];
+        if (!closeable.includes(job.state)) continue;
+        const age = now - new Date(job.updatedAt).getTime();
+        if (age > autoCloseMinutes * 60 * 1000) {
+          transitionState(job, STATES.CLOSED, { reason: "auto-close" });
+          closedIds.push(job.id);
+        }
+      }
+
+      if (dueJobs.length || closedIds.length) {
         await saveJobs(jobs);
       }
 
-      return dueJobs.map((job) => job.id);
+      return { escalated: dueJobs.map((job) => job.id), closed: closedIds };
     });
 
     if (!lockResult.acquired) {
       return sendJson(res, 202, { success: true, skipped: true, reason: "lock-unavailable", processed: [] });
     }
 
-    return sendJson(res, 200, { success: true, processed: lockResult.result });
+    return sendJson(res, 200, { success: true, ...lockResult.result });
   }
 
   // Resolve human review flag
@@ -2315,12 +2400,14 @@ module.exports.default = handler;
 module.exports._internals = {
   STATES,
   buildDispatchBatch,
+  closeJobIfTerminal,
   computeNextTargets,
   createJobFromPayload,
   defaultConfig,
   findMatchingRule,
   getJobStatus,
   getActiveJobsForContact,
+  handleSubReplacementTimeout,
   isVapiResponsePath,
   matchesRule,
   mergeConfig,
@@ -2330,5 +2417,6 @@ module.exports._internals = {
   safeEqualString,
   sanitizeConfigForUi,
   sanitizeConfigInput,
+  transitionState,
   validateTwilioSignature
 };
