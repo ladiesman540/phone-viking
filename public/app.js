@@ -610,12 +610,29 @@ function wireActions() {
 
 let pollTimer = null;
 
+async function pollUpdate() {
+  // Only refresh jobs (not config) to avoid overwriting unsaved edits
+  try {
+    state.jobs = await fetchJson("/api/jobs");
+    if (state.activeTab === "jobs") {
+      if (state.selectedJobId) {
+        // Refresh the detail panel if open
+        const updated = state.jobs.find((j) => j.id === state.selectedJobId);
+        if (updated) {
+          state.selectedJob = updated;
+          renderJobDetail();
+        }
+      } else {
+        renderJobs();
+      }
+      await loadEvents();
+    }
+  } catch {}
+}
+
 function startPolling(ms = 5000) {
   stopPolling();
-  pollTimer = setInterval(() => {
-    loadAll().catch(() => {});
-    if (state.activeTab === "jobs" && !state.selectedJobId) loadEvents().catch(() => {});
-  }, ms);
+  pollTimer = setInterval(pollUpdate, ms);
 }
 
 function stopPolling() {
@@ -653,8 +670,11 @@ async function loadEvents() {
   const since = state.lastEventTime || new Date(Date.now() - 3600000).toISOString();
   const events = await fetchJson(`/api/events?since=${encodeURIComponent(since)}&limit=30`);
   if (events.length) {
-    state.events = events;
-    state.lastEventTime = events[0].at;
+    // Merge new events, deduplicate by id, keep most recent 50
+    const existingIds = new Set(state.events.map((e) => e.id));
+    const newEvents = events.filter((e) => !existingIds.has(e.id));
+    state.events = [...newEvents, ...state.events].slice(0, 50);
+    state.lastEventTime = state.events[0].at;
     renderEventFeed();
   }
 }
@@ -839,29 +859,44 @@ function renderJobDetail() {
     html += `</div></div>`;
   }
 
-  // Action buttons
-  const actions = [];
+  html += `<div class="detail-actions" id="detail-actions"></div>`;
+  html += `</div>`;
+  container.innerHTML = html;
+
+  // Wire action buttons safely (no inline onclick)
+  const actionsDiv = container.querySelector("#detail-actions");
   if (job.state === "HUMAN_REVIEW_REQUIRED") {
     const unresolvedFlags = (job.humanReviewFlags || []).filter((f) => !f.resolved);
     for (const flag of unresolvedFlags) {
-      actions.push(`<button class="button button-warning" onclick="resolveReview('${job.id}','${flag.trigger}')">Resolve: ${escapeHtml(flag.trigger)}</button>`);
+      const btn = document.createElement("button");
+      btn.className = "button button-warning";
+      btn.textContent = `Resolve: ${flag.trigger}`;
+      btn.addEventListener("click", () => resolveReview(job.id, flag.trigger));
+      actionsDiv.append(btn);
     }
   }
   if (job.state === "PROVISIONAL_SUB_ASSIGNMENT" && !job.enRouteConfirmedAt) {
-    actions.push(`<button class="button button-success" onclick="markEnRoute('${job.id}')">Mark Sub En Route</button>`);
+    const btn = document.createElement("button");
+    btn.className = "button button-success";
+    btn.textContent = "Mark Sub En Route";
+    btn.addEventListener("click", () => markEnRoute(job.id));
+    actionsDiv.append(btn);
   }
   if (job.possibleDuplicateOf) {
-    actions.push(`<button class="button button-danger" onclick="cancelAsDuplicate('${job.id}')">Cancel as Duplicate of ${escapeHtml(job.possibleDuplicateOf)}</button>`);
+    const btn = document.createElement("button");
+    btn.className = "button button-danger";
+    btn.textContent = `Cancel as Duplicate of ${job.possibleDuplicateOf}`;
+    btn.addEventListener("click", () => cancelAsDuplicate(job.id));
+    actionsDiv.append(btn);
   }
   if (["DISPATCH_CONFIRMED_INTERNAL", "DISPATCH_CONFIRMED_SUBCONTRACTOR", "UNABLE_TO_DISPATCH", "HUMAN_REVIEW_REQUIRED"].includes(job.state)) {
-    actions.push(`<button class="button button-secondary" onclick="closeJob('${job.id}')">Close Job</button>`);
+    const btn = document.createElement("button");
+    btn.className = "button button-secondary";
+    btn.textContent = "Close Job";
+    btn.addEventListener("click", () => closeJob(job.id));
+    actionsDiv.append(btn);
   }
-  if (actions.length) {
-    html += `<div class="detail-actions">${actions.join("")}</div>`;
-  }
-
-  html += `</div>`;
-  container.innerHTML = html;
+  if (!actionsDiv.children.length) actionsDiv.remove();
 }
 
 function escapeHtml(str) {

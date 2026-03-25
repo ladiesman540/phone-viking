@@ -302,6 +302,7 @@ function transitionState(job, newState, payload = {}) {
   job.state = newState;
   job.status = getJobStatus(job);
   job.updatedAt = new Date().toISOString();
+  job.version = (job.version || 0) + 1;
   appendTimeline(job, "state-change", { from, to: newState, ...payload });
 
   // Auto-update communication flags based on state
@@ -363,6 +364,7 @@ const defaultConfig = {
     triggerOnConflictingAcceptances: true,
     triggerOnSafetyRisk: true,
     triggerOnPricingIssue: true,
+    triggerOnPossibleDuplicate: true,
     slackNotify: true
   },
   escalation: {
@@ -909,7 +911,7 @@ function computeNextTargets(job, config, options = {}) {
   const tiers = Array.from(
     new Set(
       availableContacts
-        .map((contact) => Number(contact.priorityTier ?? 999))
+        .map((contact) => getEffectiveTier(contact, job.issueType))
         .filter((tier) => Number.isFinite(tier))
         .sort((left, right) => left - right)
     )
@@ -920,7 +922,7 @@ function computeNextTargets(job, config, options = {}) {
   const selectedContacts =
     chosenTier == null
       ? []
-      : availableContacts.filter((contact) => Number(contact.priorityTier ?? 999) === chosenTier).slice(0, batchSize);
+      : availableContacts.filter((contact) => getEffectiveTier(contact, job.issueType) === chosenTier).slice(0, batchSize);
 
   return {
     matchedRule,
@@ -1138,6 +1140,11 @@ async function handleSubReplacementTimeout(job, config, jobs) {
   job.escalationScheduledForStep = null;
   clearEscalation(job.id);
   await sendSlackMessage(config, `*Subcontractor confirmed* — provisional assignment finalized for job ${job.id}.`);
+  // Confirm to customer that the sub is definitely coming
+  const subContact = (config.contacts || []).find((c) => c.id === job.provisionalSubId);
+  const customerResult = await callCustomerUpdate(config, job, "sub_dispatched", subContact?.name);
+  appendTimeline(job, "customer-callback", { type: "sub_confirmed", callId: customerResult.callId, error: customerResult.error, skipped: customerResult.skipped });
+  (job.customerCallbacks = job.customerCallbacks || []).push({ type: "sub_confirmed", at: new Date().toISOString(), outcome: customerResult.ok ? "completed" : "failed", callId: customerResult.callId, error: customerResult.error || null });
   closeJobIfTerminal(job);
   await saveJobs(jobs);
 }
@@ -1145,10 +1152,6 @@ async function handleSubReplacementTimeout(job, config, jobs) {
 function setCommFlag(job, flag, value) {
   job.commFlags = job.commFlags || { customerCallbackDue: false, techContactInProgress: false, subcontractorCallbackPending: false, finalNotificationPending: false };
   job.commFlags[flag] = value;
-}
-
-function clearAllCommFlags(job) {
-  job.commFlags = { customerCallbackDue: false, techContactInProgress: false, subcontractorCallbackPending: false, finalNotificationPending: false };
 }
 
 function closeJobIfTerminal(job, overrideFinalStatus) {
@@ -1171,7 +1174,8 @@ async function checkHumanReview(job, config, trigger, context) {
     ambiguousResponse: hr.triggerOnAmbiguousResponse,
     conflictingAcceptances: hr.triggerOnConflictingAcceptances,
     safetyRisk: hr.triggerOnSafetyRisk,
-    pricingIssue: hr.triggerOnPricingIssue
+    pricingIssue: hr.triggerOnPricingIssue,
+    possibleDuplicate: hr.triggerOnPossibleDuplicate
   };
   if (triggerMap[trigger] === false) return;
 
@@ -1414,6 +1418,7 @@ async function startVapiOutboundCall(config, toPhone, job, contactId, contactNam
 }
 
 async function callCustomerUpdate(config, job, updateType, techName, etaMinutes) {
+  setCommFlag(job, "customerCallbackDue", true);
   const { apiKey, phoneNumberId, baseUrl } = config.vapi || {};
   if (!apiKey) {
     log("customer-callback-skip", { jobId: job.id, reason: "Vapi not configured." });
@@ -1482,9 +1487,11 @@ async function callCustomerUpdate(config, job, updateType, techName, etaMinutes)
     let result;
     try { result = JSON.parse(text); } catch { result = { raw: text }; }
     log("customer-callback-result", { jobId: job.id, updateType, ok: response.ok, status: response.status, callId: result.id, error: result.message || result.error || null });
+    setCommFlag(job, "customerCallbackDue", false);
     return { skipped: false, ok: response.ok, status: response.status, callId: result.id, error: result.message || result.error || null };
   } catch (error) {
     log("customer-callback-error", { jobId: job.id, updateType, error: error.message });
+    setCommFlag(job, "customerCallbackDue", false);
     return { skipped: false, ok: false, error: error.message };
   }
 }
@@ -1926,7 +1933,6 @@ async function saveJobs(jobs) {
     return;
   }
   for (const job of jobs) {
-    job.version = (job.version || 0) + 1;
     await sql`INSERT INTO pv_jobs (id, data, created_at, updated_at) VALUES (${job.id}, ${JSON.stringify(job)}, ${job.createdAt}, NOW())
               ON CONFLICT (id) DO UPDATE SET data = ${JSON.stringify(job)}, updated_at = NOW()`;
   }
@@ -2003,7 +2009,7 @@ async function handleApi(req, res, pathname, url) {
   const jobs = await loadJobs();
 
   // Skip logging for high-frequency read endpoints
-  if (pathname !== "/api/health" && pathname !== "/api/config" && pathname !== "/api/jobs") {
+  if (pathname !== "/api/health" && pathname !== "/api/config" && pathname !== "/api/jobs" && pathname !== "/api/events") {
     log("api-request", { method: req.method, pathname });
   }
 
@@ -2085,6 +2091,16 @@ async function handleApi(req, res, pathname, url) {
       appendTimeline(job, "slack-summary-failed", { message: error.message });
     }
 
+    // Skip dispatch if human review paused the job
+    if (job.state === STATES.HUMAN_REVIEW_REQUIRED) {
+      await saveJobs(jobs);
+      const resultMessage = `Job ${job.id} created. Awaiting human review before dispatch.`;
+      if (toolCall?.id) {
+        return sendJson(res, 200, { results: [{ toolCallId: toolCall.id, result: JSON.stringify({ success: true, message: resultMessage, jobId: job.id }) }] });
+      }
+      return sendJson(res, 200, { success: true, message: resultMessage, jobId: job.id });
+    }
+
     // Dispatch first step in escalation sequence
     const target = getEscalationTarget(job, config);
     let resultMessage;
@@ -2111,12 +2127,9 @@ async function handleApi(req, res, pathname, url) {
       setEscalationDeadline(job, timerMinutes, job.escalationStep);
       scheduleEscalation(job.id, timerMinutes, config, job.escalationStep);
       // Initial customer callback — "we received your request, team is being contacted"
-      setCommFlag(job, "customerCallbackDue", true);
-      setCommFlag(job, "techContactInProgress", true);
       const initialCallResult = await callCustomerUpdate(config, job, "initial");
       appendTimeline(job, "customer-callback", { type: "initial", callId: initialCallResult.callId, error: initialCallResult.error, skipped: initialCallResult.skipped });
       (job.customerCallbacks = job.customerCallbacks || []).push({ type: "initial", at: new Date().toISOString(), outcome: initialCallResult.ok ? "completed" : "failed", callId: initialCallResult.callId, error: initialCallResult.error || null });
-      setCommFlag(job, "customerCallbackDue", false);
 
       resultMessage = `Job ${job.id} created. Contacting ${target.contact.name}.`;
     } else {
@@ -2485,7 +2498,7 @@ async function handleApi(req, res, pathname, url) {
         if (!closeable.includes(job.state)) continue;
         const age = now - new Date(job.updatedAt).getTime();
         if (age > autoCloseMinutes * 60 * 1000) {
-          transitionState(job, STATES.CLOSED, { reason: "auto-close" });
+          closeJobIfTerminal(job, null);
           closedIds.push(job.id);
         }
       }
@@ -2578,8 +2591,14 @@ async function handleApi(req, res, pathname, url) {
     const jobId = pathname.split("/")[3];
     const job = jobs.find((j) => j.id === jobId);
     if (!job) return sendJson(res, 404, { error: "Job not found." });
+    if (job.state === STATES.CLOSED) return sendJson(res, 200, { success: true, job });
     const body = await parseBody(req);
-    closeJobIfTerminal(job, normalizeString(body.finalStatus));
+    const override = normalizeString(body.finalStatus);
+    // Force-close: if closeJobIfTerminal can't handle the current state, transition to UNABLE_TO_DISPATCH first
+    if (!closeJobIfTerminal(job, override)) {
+      job.finalStatus = override || "MANUALLY_CLOSED";
+      transitionState(job, STATES.CLOSED, { reason: "manual-close", finalStatus: job.finalStatus });
+    }
     clearEscalation(job.id);
     appendTimeline(job, "manual-close", { by: normalizeString(body.closedBy || "dispatcher"), reason: normalizeString(body.reason) }, "dispatcher");
     await saveJobs(jobs);
