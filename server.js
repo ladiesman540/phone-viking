@@ -146,8 +146,15 @@ function requireBearerToken(req, expectedToken, label) {
   throw new HttpError(401, `${label} authorization failed.`);
 }
 
-function getVapiWebhookToken(config) {
+function getVapiWebhookSecret(config) {
   return normalizeString(process.env.VAPI_WEBHOOK_TOKEN || config?.vapi?.webhookToken);
+}
+
+function validateVapiSignature(secret, rawBody, signatureHeader) {
+  if (!secret) return true;
+  if (!signatureHeader) return false;
+  const expected = createHmac("sha256", secret).update(rawBody, "utf8").digest("base64");
+  return safeEqualString(expected, signatureHeader);
 }
 
 function validateTwilioSignature(authToken, signature, requestUrl, params) {
@@ -552,7 +559,7 @@ function sendText(res, statusCode, text) {
   res.end(text);
 }
 
-async function parseBody(req) {
+async function parseBody(req, options = {}) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -564,30 +571,34 @@ async function parseBody(req) {
   }
 
   if (!chunks.length) {
-    return {};
+    return options.returnRaw ? { parsed: {}, raw: "" } : {};
   }
 
   const raw = Buffer.concat(chunks).toString("utf8");
   const contentType = req.headers["content-type"] || "";
 
+  function wrapResult(parsed) {
+    return options.returnRaw ? { parsed, raw } : parsed;
+  }
+
   if (contentType.includes("application/json")) {
     try {
-      return JSON.parse(raw);
+      return wrapResult(JSON.parse(raw));
     } catch {
       throw new HttpError(400, "Invalid JSON payload.");
     }
   }
 
   if (contentType.includes("application/x-www-form-urlencoded")) {
-    return Object.fromEntries(new URLSearchParams(raw).entries());
+    return wrapResult(Object.fromEntries(new URLSearchParams(raw).entries()));
   }
 
   // Try parsing as JSON even without Content-Type header
   try {
-    return JSON.parse(raw);
+    return wrapResult(JSON.parse(raw));
   } catch {}
 
-  return { raw };
+  return wrapResult({ raw });
 }
 
 function clone(value) {
@@ -1836,8 +1847,11 @@ async function handleApi(req, res, pathname) {
   // We must respond: { results: [{ toolCallId, result }] }
 
   if (req.method === "POST" && pathname === "/api/vapi/create-job") {
-    requireBearerToken(req, getVapiWebhookToken(config), "Vapi webhook");
-    const body = await parseBody(req);
+    const { parsed: body, raw: rawBody } = await parseBody(req, { returnRaw: true });
+    const vapiSecret = getVapiWebhookSecret(config);
+    if (!validateVapiSignature(vapiSecret, rawBody, normalizeString(req.headers["x-vapi-signature"]))) {
+      throw new HttpError(401, "Vapi webhook signature verification failed.");
+    }
     const toolCall = body.message?.toolCallList?.[0];
     const args = toolCall?.arguments || toolCall?.function?.arguments || body;
     assertCreateJobPayload(args);
@@ -1902,8 +1916,11 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === "POST" && isVapiResponsePath(pathname)) {
-    requireBearerToken(req, getVapiWebhookToken(config), "Vapi webhook");
-    const body = await parseBody(req);
+    const { parsed: body, raw: rawBody } = await parseBody(req, { returnRaw: true });
+    const vapiSecret = getVapiWebhookSecret(config);
+    if (!validateVapiSignature(vapiSecret, rawBody, normalizeString(req.headers["x-vapi-signature"]))) {
+      throw new HttpError(401, "Vapi webhook signature verification failed.");
+    }
     const toolCall = body.message?.toolCallList?.[0];
     const args = toolCall?.arguments || toolCall?.function?.arguments || body;
     assertString(args.jobId, "jobId");
@@ -2137,8 +2154,11 @@ async function handleApi(req, res, pathname) {
 
   // Vapi call-ended webhook
   if (req.method === "POST" && pathname === "/api/vapi/call-ended") {
-    requireBearerToken(req, getVapiWebhookToken(config), "Vapi webhook");
-    const body = await parseBody(req);
+    const { parsed: body, raw: rawBody } = await parseBody(req, { returnRaw: true });
+    const vapiSecret = getVapiWebhookSecret(config);
+    if (!validateVapiSignature(vapiSecret, rawBody, normalizeString(req.headers["x-vapi-signature"]))) {
+      throw new HttpError(401, "Vapi webhook signature verification failed.");
+    }
     const metadata = body.message?.call?.metadata || body.metadata || {};
     const jobId = metadata.jobId;
     const contactId = metadata.contactId || metadata.techContactId;
