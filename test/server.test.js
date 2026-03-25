@@ -344,4 +344,32 @@ test("getJobStatus returns correct status for all terminal and provisional state
   assert.equal(_internals.getJobStatus({ state: _internals.STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR }), "accepted");
   assert.equal(_internals.getJobStatus({ state: _internals.STATES.CLOSED }), "closed");
   assert.equal(_internals.getJobStatus({ state: _internals.STATES.UNABLE_TO_DISPATCH }), "closed");
+  assert.equal(_internals.getJobStatus({ state: _internals.STATES.HUMAN_REVIEW_REQUIRED }), "paused");
+});
+
+// --- Phase 3 tests ---
+
+test("HUMAN_REVIEW_REQUIRED state exists and has valid transitions", () => {
+  assert.equal(_internals.STATES.HUMAN_REVIEW_REQUIRED, "HUMAN_REVIEW_REQUIRED");
+
+  // Can transition from awaiting to human review
+  const job = { state: _internals.STATES.AWAITING_TECH1_RESPONSE, timeline: [] };
+  _internals.transitionState(job, _internals.STATES.HUMAN_REVIEW_REQUIRED, { trigger: "safetyRisk" });
+  assert.equal(job.state, _internals.STATES.HUMAN_REVIEW_REQUIRED);
+
+  // Can transition back to awaiting
+  _internals.transitionState(job, _internals.STATES.AWAITING_TECH1_RESPONSE, { reason: "resolved" });
+  assert.equal(job.state, _internals.STATES.AWAITING_TECH1_RESPONSE);
+});
+
+test("cron skips paused (HUMAN_REVIEW_REQUIRED) jobs", () => {
+  const pausedJob = { state: _internals.STATES.HUMAN_REVIEW_REQUIRED, escalationDueAt: new Date(Date.now() - 60000).toISOString() };
+  // getJobStatus returns "paused", not "open", so cron filter would exclude it
+  assert.equal(_internals.getJobStatus(pausedJob), "paused");
+  assert.notEqual(_internals.getJobStatus(pausedJob), "open");
+});
+
+test("safetyDisclaimer exists in defaultConfig.voiceScripts", () => {
+  assert.ok(_internals.defaultConfig.voiceScripts.safetyDisclaimer);
+  assert.ok(_internals.defaultConfig.voiceScripts.safetyDisclaimer.includes("911"));
 });

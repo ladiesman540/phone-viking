@@ -262,21 +262,23 @@ const STATES = Object.freeze({
   DISPATCH_CONFIRMED_SUBCONTRACTOR: "DISPATCH_CONFIRMED_SUBCONTRACTOR",
   UNABLE_TO_DISPATCH: "UNABLE_TO_DISPATCH",
   CANCEL_SUBCONTRACTOR_PENDING: "CANCEL_SUBCONTRACTOR_PENDING",
+  HUMAN_REVIEW_REQUIRED: "HUMAN_REVIEW_REQUIRED",
   CLOSED: "CLOSED"
 });
 
 // All AWAITING_* states can transition to any other AWAITING_* state (sequence is configurable),
 // to DISPATCH_CONFIRMED_INTERNAL (accepted), or to UNABLE_TO_DISPATCH (exhausted).
 const AWAITING_STATES = [STATES.AWAITING_TECH1_RESPONSE, STATES.AWAITING_TECH2_RESPONSE, STATES.AWAITING_TECH1_FINAL_RETRY, STATES.AWAITING_SUBCONTRACTOR_RESPONSE];
-const FROM_AWAITING = [...AWAITING_STATES, STATES.DISPATCH_CONFIRMED_INTERNAL, STATES.UNABLE_TO_DISPATCH, STATES.PROVISIONAL_SUB_ASSIGNMENT];
+const FROM_AWAITING = [...AWAITING_STATES, STATES.DISPATCH_CONFIRMED_INTERNAL, STATES.UNABLE_TO_DISPATCH, STATES.PROVISIONAL_SUB_ASSIGNMENT, STATES.HUMAN_REVIEW_REQUIRED];
 const ALLOWED_TRANSITIONS = {
-  [STATES.OPEN_PENDING_DISPATCH]: [...AWAITING_STATES, STATES.UNABLE_TO_DISPATCH],
+  [STATES.OPEN_PENDING_DISPATCH]: [...AWAITING_STATES, STATES.UNABLE_TO_DISPATCH, STATES.HUMAN_REVIEW_REQUIRED],
   [STATES.AWAITING_TECH1_RESPONSE]: FROM_AWAITING,
   [STATES.AWAITING_TECH2_RESPONSE]: FROM_AWAITING,
   [STATES.AWAITING_TECH1_FINAL_RETRY]: FROM_AWAITING,
   [STATES.AWAITING_SUBCONTRACTOR_RESPONSE]: FROM_AWAITING,
-  [STATES.PROVISIONAL_SUB_ASSIGNMENT]: [STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, STATES.CANCEL_SUBCONTRACTOR_PENDING, STATES.DISPATCH_CONFIRMED_INTERNAL],
+  [STATES.PROVISIONAL_SUB_ASSIGNMENT]: [STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, STATES.CANCEL_SUBCONTRACTOR_PENDING, STATES.DISPATCH_CONFIRMED_INTERNAL, STATES.HUMAN_REVIEW_REQUIRED],
   [STATES.CANCEL_SUBCONTRACTOR_PENDING]: [STATES.DISPATCH_CONFIRMED_INTERNAL],
+  [STATES.HUMAN_REVIEW_REQUIRED]: [...AWAITING_STATES, STATES.DISPATCH_CONFIRMED_INTERNAL, STATES.UNABLE_TO_DISPATCH, STATES.CLOSED],
   [STATES.DISPATCH_CONFIRMED_INTERNAL]: [STATES.CLOSED],
   [STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR]: [STATES.CLOSED],
   [STATES.UNABLE_TO_DISPATCH]: [STATES.CLOSED, STATES.DISPATCH_CONFIRMED_INTERNAL]
@@ -286,6 +288,7 @@ function getJobStatus(job) {
   const s = job.state;
   if (!s) return job.status || "open";
   if (s === STATES.DISPATCH_CONFIRMED_INTERNAL || s === STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR) return "accepted";
+  if (s === STATES.HUMAN_REVIEW_REQUIRED) return "paused";
   if (s === STATES.CLOSED || s === STATES.UNABLE_TO_DISPATCH) return "closed";
   return "open";
 }
@@ -335,7 +338,8 @@ const defaultConfig = {
     customerSubDispatched: "Hi {{callerName}}, this is {{businessName}} calling back. We've arranged a service partner to assist you tonight with your {{issueType}} issue. They should be reaching out to you shortly.",
     customerUnavailable: "Hi {{callerName}}, this is {{businessName}} calling back about your {{issueType}} request. Unfortunately we weren't able to reach any of our on-call techs tonight. If this is still urgent, you can call our direct line at 587-809-6383. We really apologize for the inconvenience.",
     customerSubCancelledTechAssigned: "Hi {{callerName}}, this is {{businessName}} with an update. Good news — one of our own techs is now heading your way for your {{issueType}} issue.{{etaText}} They'll call you when they're close.",
-    subCancellation: "Hi, this is {{businessName}} dispatch. We had a service request we'd reached out about, but one of our techs is now available to cover it. You're off the hook — sorry for the back and forth."
+    subCancellation: "Hi, this is {{businessName}} dispatch. We had a service request we'd reached out about, but one of our techs is now available to cover it. You're off the hook — sorry for the back and forth.",
+    safetyDisclaimer: "Before we continue — if you are in any immediate danger from gas, fire, flooding, or a medical emergency, please hang up and call 911 right now. Your safety comes first. Once you are safe, call us back and we will get help to you."
   },
   humanReview: {
     enabled: true,
@@ -855,7 +859,8 @@ function getTemplateValues(job, contact, config) {
     summary: buildJobSummary(job),
     contactName: contact?.name || "",
     company: contact?.company || "",
-    businessName: config?.workspace?.businessName || defaultConfig.workspace.businessName
+    businessName: config?.workspace?.businessName || defaultConfig.workspace.businessName,
+    hazards: job.hazards || ""
   };
 }
 
@@ -1124,9 +1129,17 @@ async function checkHumanReview(job, config, trigger, context) {
   appendTimeline(job, "human-review-flagged", { trigger, context });
   log("human-review-flagged", { jobId: job.id, trigger, context });
 
+  // Pause the workflow — save the current state so we can resume later
+  if (job.state && job.state !== STATES.HUMAN_REVIEW_REQUIRED) {
+    job.humanReviewPausedFrom = job.state;
+    transitionState(job, STATES.HUMAN_REVIEW_REQUIRED, { trigger, context });
+    clearEscalation(job.id);
+    job.escalationDueAt = null;
+  }
+
   if (hr.slackNotify) {
     try {
-      await sendSlackMessage(config, `*Human review needed* — ${trigger}: ${context}`, job.slackThreadTs);
+      await sendSlackMessage(config, `*Human review needed* — ${trigger}: ${context}. Workflow paused.`, job.slackThreadTs);
     } catch {}
   }
 }
@@ -2414,6 +2427,22 @@ async function handleApi(req, res, pathname) {
       job.humanReviewFlags[flagIndex].resolvedAt = new Date().toISOString();
       job.humanReviewFlags[flagIndex].resolvedBy = normalizeString(body.resolvedBy || "dispatcher");
       appendTimeline(job, "human-review-resolved", { trigger: body.trigger }, "dispatcher");
+
+      // If all flags resolved and job is paused, resume the workflow
+      const hasUnresolved = (job.humanReviewFlags || []).some((f) => !f.resolved);
+      if (!hasUnresolved && job.state === STATES.HUMAN_REVIEW_REQUIRED && job.humanReviewPausedFrom) {
+        const resumeTo = job.humanReviewPausedFrom;
+        transitionState(job, resumeTo, { reason: "human-review-resolved" });
+        job.humanReviewPausedFrom = null;
+        // Restart escalation timer if job is still in an active dispatch state
+        if (getJobStatus(job) === "open" && job.matchedRuleId) {
+          const rule = (config.routingRules || []).find((r) => r.id === job.matchedRuleId);
+          const timerMinutes = Number(rule?.strategy?.escalateAfterMinutes || config.escalation?.defaultTimerMinutes || 3);
+          setEscalationDeadline(job, timerMinutes, job.escalationStep);
+          scheduleEscalation(job.id, timerMinutes, config, job.escalationStep);
+        }
+        appendTimeline(job, "workflow-resumed", { resumedFrom: "human-review", resumedTo: resumeTo }, "dispatcher");
+      }
       await saveJobs(jobs);
     }
     return sendJson(res, 200, { success: true, job });
