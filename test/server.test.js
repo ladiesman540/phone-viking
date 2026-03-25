@@ -419,3 +419,54 @@ test("sanitizeRoutingRules preserves requiredTradeTags in conditions", () => {
   const sanitized = _internals.sanitizeConfigInput(config, config);
   assert.deepEqual(sanitized.routingRules[0].conditions.requiredTradeTags, ["hvac"]);
 });
+
+// --- Final gaps tests ---
+
+test("closeJobIfTerminal maps HUMAN_REVIEW_REQUIRED to ESCALATED_TO_HUMAN_SUPERVISOR", () => {
+  const job = { state: _internals.STATES.HUMAN_REVIEW_REQUIRED, timeline: [] };
+  const closed = _internals.closeJobIfTerminal(job);
+  assert.equal(closed, true);
+  assert.equal(job.finalStatus, "ESCALATED_TO_HUMAN_SUPERVISOR");
+  assert.equal(job.state, _internals.STATES.CLOSED);
+});
+
+test("createJobFromPayload includes commFlags, recordings, and possibleDuplicateOf fields", () => {
+  const config = clone(_internals.defaultConfig);
+  const job = _internals.createJobFromPayload({
+    callerName: "Test", callbackNumber: "+15551234567", serviceAddress: "123 Test St",
+    issueType: "hvac", urgency: "emergency", summary: "No heat"
+  }, config);
+  assert.deepEqual(job.commFlags, { customerCallbackDue: false, techContactInProgress: false, subcontractorCallbackPending: false, finalNotificationPending: false });
+  assert.deepEqual(job.recordings, []);
+  assert.equal(job.possibleDuplicateOf, null);
+});
+
+test("transitionState auto-sets commFlags based on target state", () => {
+  const job = { state: _internals.STATES.OPEN_PENDING_DISPATCH, timeline: [], commFlags: {} };
+  _internals.transitionState(job, _internals.STATES.AWAITING_TECH1_RESPONSE);
+  assert.equal(job.commFlags.techContactInProgress, true);
+  assert.equal(job.commFlags.subcontractorCallbackPending, false);
+
+  _internals.transitionState(job, _internals.STATES.AWAITING_SUBCONTRACTOR_RESPONSE);
+  assert.equal(job.commFlags.techContactInProgress, false);
+  assert.equal(job.commFlags.subcontractorCallbackPending, true);
+
+  _internals.transitionState(job, _internals.STATES.DISPATCH_CONFIRMED_INTERNAL);
+  assert.equal(job.commFlags.finalNotificationPending, true);
+  assert.equal(job.commFlags.techContactInProgress, false);
+
+  _internals.transitionState(job, _internals.STATES.CLOSED);
+  assert.equal(job.commFlags.finalNotificationPending, false);
+});
+
+test("sanitizeContacts preserves scenarioTiers", () => {
+  const config = clone(_internals.defaultConfig);
+  config.contacts = [{
+    id: "c1", name: "Sub A", type: "partner", phone: "+15550000001",
+    scenarioTiers: [{ issueType: "hvac", tier: 1 }, { issueType: "plumbing", tier: 3 }]
+  }];
+  const sanitized = _internals.sanitizeConfigInput(config, config);
+  assert.equal(sanitized.contacts[0].scenarioTiers.length, 2);
+  assert.equal(sanitized.contacts[0].scenarioTiers[0].issueType, "hvac");
+  assert.equal(sanitized.contacts[0].scenarioTiers[0].tier, 1);
+});

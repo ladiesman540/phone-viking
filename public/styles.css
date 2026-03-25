@@ -798,3 +798,21 @@ details.panel[open] > summary h2::after {
   background: rgba(33, 92, 53, 0.12);
   color: #215c35;
 }
+
+/* Communication flag pills */
+
+.comm-flag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  margin-right: 4px;
+}
+
+.flag-callback { background: rgba(198, 93, 46, 0.14); color: var(--accent-strong); }
+.flag-tech     { background: rgba(46, 113, 198, 0.12); color: #2e5fa0; }
+.flag-sub      { background: rgba(198, 154, 46, 0.15); color: #8a6d1e; }
+.flag-final    { background: rgba(33, 92, 53, 0.12); color: #215c35; }
+.flag-dup      { background: rgba(140, 47, 47, 0.12); color: var(--danger); }

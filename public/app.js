@@ -169,6 +169,9 @@ function createContactCard(contact, index) {
     if (prop === "tradeTagsCsv") {
       value = (contact.tradeTags || []).join(",");
     }
+    if (prop === "scenarioTiersJson") {
+      value = JSON.stringify(contact.scenarioTiers || [], null, 2);
+    }
 
     if (input.type === "checkbox") {
       if (prop === "active" || prop === "mayReplaceSubcontractor") {
@@ -185,6 +188,8 @@ function createContactCard(contact, index) {
         contact.serviceAreas = normalizeCsv(input.value);
       } else if (prop === "tradeTagsCsv") {
         contact.tradeTags = normalizeCsv(input.value);
+      } else if (prop === "scenarioTiersJson") {
+        try { contact.scenarioTiers = JSON.parse(input.value || "[]"); input.setCustomValidity(""); } catch { input.setCustomValidity("Invalid JSON"); }
       } else if (input.type === "checkbox") {
         contact[prop] = input.checked;
       } else if (input.type === "number") {
@@ -718,9 +723,19 @@ function renderJobDetail() {
   let html = `<div class="panel">`;
 
   // Header
+  const flags = job.commFlags || {};
+  const flagPills = [
+    flags.customerCallbackDue && '<span class="comm-flag flag-callback">Callback due</span>',
+    flags.techContactInProgress && '<span class="comm-flag flag-tech">Tech outreach</span>',
+    flags.subcontractorCallbackPending && '<span class="comm-flag flag-sub">Sub pending</span>',
+    flags.finalNotificationPending && '<span class="comm-flag flag-final">Final notify</span>'
+  ].filter(Boolean).join(" ");
+  const dupWarning = job.possibleDuplicateOf ? ` <span class="comm-flag flag-dup">Possible dup of ${escapeHtml(job.possibleDuplicateOf)}</span>` : "";
+
   html += `<div class="detail-header">
     <div>
-      <span class="state-badge" data-status="${status}">${job.finalStatus || job.state || "open"}</span>
+      <span class="state-badge" data-status="${status}">${job.finalStatus || job.state || "open"}</span>${dupWarning}
+      ${flagPills ? `<div style="margin-top:6px">${flagPills}</div>` : ""}
       <h2>${job.issueType || "Service request"} &middot; ${job.locationArea || "Unknown"}</h2>
       <p class="job-meta">${job.id} &middot; ${new Date(job.createdAt).toLocaleString()} &middot; Rule: ${job.matchedRuleId || "none"}</p>
     </div>
@@ -791,6 +806,22 @@ function renderJobDetail() {
     html += `</tbody></table></div>`;
   }
 
+  // Recordings
+  const recordings = job.recordings || [];
+  if (recordings.length) {
+    html += `<div class="detail-section"><h3>Recordings (${recordings.length})</h3>`;
+    for (const rec of recordings) {
+      const recContact = contactMap.get(rec.contactId);
+      const recName = recContact ? recContact.name : (rec.contactId || "customer");
+      html += `<div style="margin-bottom:10px; font-size:0.85rem">
+        <span class="field-label">${new Date(rec.at).toLocaleTimeString()} &middot; ${escapeHtml(recName)}</span>
+        ${rec.recordingUrl ? ` &middot; <a href="${escapeHtml(rec.recordingUrl)}" target="_blank" rel="noopener" style="color:var(--accent)">Play recording</a>` : ""}
+        ${rec.transcript ? `<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--muted);font-size:0.78rem">Transcript</summary><pre class="code-block" style="margin-top:4px;font-size:0.75rem;max-height:200px;overflow-y:auto">${escapeHtml(rec.transcript)}</pre></details>` : ""}
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
   // Timeline
   const timeline = (job.timeline || []).slice().reverse();
   if (timeline.length) {
@@ -819,7 +850,10 @@ function renderJobDetail() {
   if (job.state === "PROVISIONAL_SUB_ASSIGNMENT" && !job.enRouteConfirmedAt) {
     actions.push(`<button class="button button-success" onclick="markEnRoute('${job.id}')">Mark Sub En Route</button>`);
   }
-  if (["DISPATCH_CONFIRMED_INTERNAL", "DISPATCH_CONFIRMED_SUBCONTRACTOR", "UNABLE_TO_DISPATCH"].includes(job.state)) {
+  if (job.possibleDuplicateOf) {
+    actions.push(`<button class="button button-danger" onclick="cancelAsDuplicate('${job.id}')">Cancel as Duplicate of ${escapeHtml(job.possibleDuplicateOf)}</button>`);
+  }
+  if (["DISPATCH_CONFIRMED_INTERNAL", "DISPATCH_CONFIRMED_SUBCONTRACTOR", "UNABLE_TO_DISPATCH", "HUMAN_REVIEW_REQUIRED"].includes(job.state)) {
     actions.push(`<button class="button button-secondary" onclick="closeJob('${job.id}')">Close Job</button>`);
   }
   if (actions.length) {
@@ -848,6 +882,14 @@ async function markEnRoute(jobId) {
   await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/en-route`, {
     method: "POST",
     body: JSON.stringify({})
+  });
+  openJobDetail(jobId);
+}
+
+async function cancelAsDuplicate(jobId) {
+  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/close`, {
+    method: "POST",
+    body: JSON.stringify({ closedBy: "dispatcher", finalStatus: "CANCELLED_DUPLICATE", reason: "Duplicate job" })
   });
   openJobDetail(jobId);
 }

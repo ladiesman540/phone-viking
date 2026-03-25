@@ -303,6 +303,22 @@ function transitionState(job, newState, payload = {}) {
   job.status = getJobStatus(job);
   job.updatedAt = new Date().toISOString();
   appendTimeline(job, "state-change", { from, to: newState, ...payload });
+
+  // Auto-update communication flags based on state
+  job.commFlags = job.commFlags || { customerCallbackDue: false, techContactInProgress: false, subcontractorCallbackPending: false, finalNotificationPending: false };
+  if (AWAITING_STATES.includes(newState)) {
+    job.commFlags.techContactInProgress = newState !== STATES.AWAITING_SUBCONTRACTOR_RESPONSE;
+    job.commFlags.subcontractorCallbackPending = newState === STATES.AWAITING_SUBCONTRACTOR_RESPONSE;
+  } else if (newState === STATES.PROVISIONAL_SUB_ASSIGNMENT) {
+    job.commFlags.techContactInProgress = false;
+    job.commFlags.subcontractorCallbackPending = true;
+  } else if (newState === STATES.DISPATCH_CONFIRMED_INTERNAL || newState === STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR || newState === STATES.UNABLE_TO_DISPATCH) {
+    job.commFlags.techContactInProgress = false;
+    job.commFlags.subcontractorCallbackPending = false;
+    job.commFlags.finalNotificationPending = true;
+  } else if (newState === STATES.CLOSED) {
+    job.commFlags = { customerCallbackDue: false, techContactInProgress: false, subcontractorCallbackPending: false, finalNotificationPending: false };
+  }
 }
 
 const defaultConfig = {
@@ -793,6 +809,15 @@ function getContactMap(config) {
   return new Map((config.contacts || []).map((contact) => [contact.id, contact]));
 }
 
+function getEffectiveTier(contact, jobIssueType) {
+  const issue = normalizeString(jobIssueType).toLowerCase();
+  if (issue && Array.isArray(contact.scenarioTiers)) {
+    const match = contact.scenarioTiers.find((s) => normalizeString(s.issueType).toLowerCase() === issue);
+    if (match) return Number(match.tier);
+  }
+  return Number(contact.priorityTier ?? 999);
+}
+
 function getRuleContacts(job, rule, config) {
   const contactMap = getContactMap(config);
   const conditions = rule?.conditions || {};
@@ -828,7 +853,7 @@ function getRuleContacts(job, rule, config) {
       return required.some((r) => tags.includes(r));
     })
     .sort((left, right) => {
-      const tierDelta = Number(left.priorityTier ?? 999) - Number(right.priorityTier ?? 999);
+      const tierDelta = getEffectiveTier(left, job.issueType) - getEffectiveTier(right, job.issueType);
       if (tierDelta !== 0) {
         return tierDelta;
       }
@@ -945,20 +970,22 @@ function isContactAvailable(contact) {
   return true;
 }
 
-function buildDefaultSequence(rule, config) {
+function buildDefaultSequence(rule, config, job) {
   const contactMap = getContactMap(config);
   const targetIds = normalizeArray(rule?.targetContactIds);
   if (!targetIds.length) return [];
   return targetIds
-    .map((id) => ({ contactId: id, partner: normalizeString(contactMap.get(id)?.type).toLowerCase() === "partner" }))
-    .filter((entry) => contactMap.has(entry.contactId));
+    .map((id) => ({ contactId: id, contact: contactMap.get(id), partner: normalizeString(contactMap.get(id)?.type).toLowerCase() === "partner" }))
+    .filter((entry) => entry.contact)
+    .sort((a, b) => getEffectiveTier(a.contact, job?.issueType) - getEffectiveTier(b.contact, job?.issueType))
+    .map(({ contactId, partner }) => ({ contactId, partner }));
 }
 
 function getEscalationTarget(job, config) {
   const rule = (config.routingRules || []).find((r) => r.id === job.matchedRuleId);
   let sequence = rule?.strategy?.escalationSequence;
   if (!sequence || !sequence.length) {
-    sequence = buildDefaultSequence(rule, config);
+    sequence = buildDefaultSequence(rule, config, job);
   }
   if (!sequence.length) return null;
 
@@ -1018,7 +1045,7 @@ async function advanceEscalation(job, config, jobs) {
 
   job.escalationStep = target.step;
   const rule = (config.routingRules || []).find((r) => r.id === job.matchedRuleId);
-  const sequence = rule?.strategy?.escalationSequence?.length ? rule.strategy.escalationSequence : buildDefaultSequence(rule, config);
+  const sequence = rule?.strategy?.escalationSequence?.length ? rule.strategy.escalationSequence : buildDefaultSequence(rule, config, job);
   const newState = stateForStep(target.step, sequence);
   if (newState) transitionState(job, newState, { contactId: target.contact.id });
 
@@ -1115,11 +1142,21 @@ async function handleSubReplacementTimeout(job, config, jobs) {
   await saveJobs(jobs);
 }
 
+function setCommFlag(job, flag, value) {
+  job.commFlags = job.commFlags || { customerCallbackDue: false, techContactInProgress: false, subcontractorCallbackPending: false, finalNotificationPending: false };
+  job.commFlags[flag] = value;
+}
+
+function clearAllCommFlags(job) {
+  job.commFlags = { customerCallbackDue: false, techContactInProgress: false, subcontractorCallbackPending: false, finalNotificationPending: false };
+}
+
 function closeJobIfTerminal(job, overrideFinalStatus) {
   const statusMap = {
     [STATES.DISPATCH_CONFIRMED_INTERNAL]: "INTERNAL_TECH_DISPATCHED",
     [STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR]: "SUBCONTRACTOR_DISPATCHED",
-    [STATES.UNABLE_TO_DISPATCH]: "UNABLE_TO_DISPATCH_AFTER_HOURS"
+    [STATES.UNABLE_TO_DISPATCH]: "UNABLE_TO_DISPATCH_AFTER_HOURS",
+    [STATES.HUMAN_REVIEW_REQUIRED]: "ESCALATED_TO_HUMAN_SUPERVISOR"
   };
   if (!statusMap[job.state]) return false;
   job.finalStatus = overrideFinalStatus || statusMap[job.state];
@@ -1213,6 +1250,14 @@ function createJobFromPayload(payload, config) {
     provisionalSubAt: null,
     enRouteConfirmedAt: null,
     finalStatus: null,
+    possibleDuplicateOf: null,
+    // Communication flags
+    commFlags: {
+      customerCallbackDue: false,
+      techContactInProgress: false,
+      subcontractorCallbackPending: false,
+      finalNotificationPending: false
+    },
     // Dispatch history
     attempts: [],
     acceptedBy: null,
@@ -1221,6 +1266,7 @@ function createJobFromPayload(payload, config) {
     humanReviewFlags: [],
     slackThreadTs: null,
     customerCallbacks: [],
+    recordings: [],
     // Concurrency
     version: 1
   };
@@ -1674,7 +1720,8 @@ function sanitizeContacts(contacts = []) {
       mayReplaceSubcontractor: contact.mayReplaceSubcontractor !== false,
       blackoutPeriods: Array.isArray(contact.blackoutPeriods) ? contact.blackoutPeriods : [],
       tempOverrides: typeof contact.tempOverrides === "object" && contact.tempOverrides ? contact.tempOverrides : {},
-      tradeTags: normalizeArray(contact.tradeTags)
+      tradeTags: normalizeArray(contact.tradeTags),
+      scenarioTiers: Array.isArray(contact.scenarioTiers) ? contact.scenarioTiers.map((s) => ({ issueType: normalizeString(s.issueType), tier: clampInteger(s.tier, 1, 99, 999) })).filter((s) => s.issueType) : []
     };
   });
 }
@@ -2010,6 +2057,19 @@ async function handleApi(req, res, pathname, url) {
     const job = createJobFromPayload(args, config);
     jobs.push(job);
 
+    // Duplicate detection — same callback number + issue type within 1 hour
+    const possibleDup = jobs.find((existing) =>
+      existing.id !== job.id &&
+      getJobStatus(existing) === "open" &&
+      normalizeString(existing.callbackNumber) === normalizeString(job.callbackNumber) &&
+      normalizeString(existing.issueType).toLowerCase() === normalizeString(job.issueType).toLowerCase() &&
+      (Date.now() - new Date(existing.createdAt).getTime()) < 3600000
+    );
+    if (possibleDup) {
+      job.possibleDuplicateOf = possibleDup.id;
+      await checkHumanReview(job, config, "possibleDuplicate", `Possible duplicate of ${possibleDup.id}`);
+    }
+
     // Human review triggers at creation
     if (normalizeString(job.hazards)) await checkHumanReview(job, config, "safetyRisk", `Hazards reported: ${job.hazards}`);
     if (job.authorizedContact === false) await checkHumanReview(job, config, "pricingIssue", "Caller is not an authorized contact");
@@ -2030,7 +2090,7 @@ async function handleApi(req, res, pathname, url) {
     let resultMessage;
     if (target) {
       const rule = (config.routingRules || []).find((r) => r.id === job.matchedRuleId);
-      const sequence = rule?.strategy?.escalationSequence?.length ? rule.strategy.escalationSequence : buildDefaultSequence(rule, config);
+      const sequence = rule?.strategy?.escalationSequence?.length ? rule.strategy.escalationSequence : buildDefaultSequence(rule, config, job);
       const newState = stateForStep(target.step, sequence);
       if (newState) transitionState(job, newState, { contactId: target.contact.id });
       log("job-created", { jobId: job.id, matchedRule: job.matchedRuleId || "(none)", firstContact: target.contact.name, step: target.step });
@@ -2051,9 +2111,12 @@ async function handleApi(req, res, pathname, url) {
       setEscalationDeadline(job, timerMinutes, job.escalationStep);
       scheduleEscalation(job.id, timerMinutes, config, job.escalationStep);
       // Initial customer callback — "we received your request, team is being contacted"
+      setCommFlag(job, "customerCallbackDue", true);
+      setCommFlag(job, "techContactInProgress", true);
       const initialCallResult = await callCustomerUpdate(config, job, "initial");
       appendTimeline(job, "customer-callback", { type: "initial", callId: initialCallResult.callId, error: initialCallResult.error, skipped: initialCallResult.skipped });
       (job.customerCallbacks = job.customerCallbacks || []).push({ type: "initial", at: new Date().toISOString(), outcome: initialCallResult.ok ? "completed" : "failed", callId: initialCallResult.callId, error: initialCallResult.error || null });
+      setCommFlag(job, "customerCallbackDue", false);
 
       resultMessage = `Job ${job.id} created. Contacting ${target.contact.name}.`;
     } else {
@@ -2357,12 +2420,19 @@ async function handleApi(req, res, pathname, url) {
     const jobId = metadata.jobId;
     const contactId = metadata.contactId || metadata.techContactId;
     const callStatus = normalizeString(body.message?.call?.status || body.status || body.call_status);
-    log("call-ended", { source: "vapi", jobId, contactId, callStatus, duration: body.message?.call?.duration || body.duration });
+    const callDuration = body.message?.call?.duration || body.duration;
+    const recordingUrl = normalizeString(body.message?.call?.recordingUrl || body.message?.call?.artifact?.recordingUrl || body.recordingUrl);
+    const transcript = normalizeString(body.message?.call?.transcript || body.message?.call?.artifact?.transcript || body.transcript);
+    log("call-ended", { source: "vapi", jobId, contactId, callStatus, duration: callDuration, hasRecording: !!recordingUrl });
 
     if (jobId) {
       const job = jobs.find((j) => j.id === jobId);
       if (job) {
-        appendTimeline(job, "call-ended", { contactId, callStatus, duration: body.message?.call?.duration || body.duration });
+        appendTimeline(job, "call-ended", { contactId, callStatus, duration: callDuration, recordingUrl: recordingUrl || undefined, transcript: transcript ? transcript.slice(0, 500) : undefined });
+        if (recordingUrl) {
+          job.recordings = job.recordings || [];
+          job.recordings.push({ callId: body.message?.call?.id || "", contactId, recordingUrl, transcript: transcript || "", at: new Date().toISOString() });
+        }
         const attempt = (job.attempts || []).find((a) => a.contactId === contactId && a.channel === "call" && a.status === "ringing");
         if (attempt) {
           attempt.status = callStatus === "ended" || callStatus === "completed" ? "answered" : (callStatus || "no-answer");
