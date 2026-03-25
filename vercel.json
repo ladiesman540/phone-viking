@@ -1,17 +1,18 @@
 {
   "version": 2,
-  "functions": {
-    "server.js": {
-      "includeFiles": "public/**"
-    }
-  },
   "builds": [
-    { "src": "server.js", "use": "@vercel/node" }
-  ],
-  "crons": [
-    { "path": "/api/cron/process-escalations", "schedule": "*/1 * * * *" }
+    {
+      "src": "server.js",
+      "use": "@vercel/node",
+      "config": {
+        "includeFiles": ["public/**"]
+      }
+    }
   ],
   "routes": [
     { "src": "/(.*)", "dest": "server.js" }
+  ],
+  "crons": [
+    { "path": "/api/cron/process-escalations", "schedule": "*/1 * * * *" }
   ]
 }
