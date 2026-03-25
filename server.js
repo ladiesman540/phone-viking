@@ -387,11 +387,60 @@ const defaultConfig = {
       helpText: "Emergency, same-day, routine."
     },
     {
+      id: "summary",
+      label: "Summary",
+      type: "textarea",
+      required: true,
+      helpText: "Short description of the issue."
+    },
+    {
       id: "notes",
       label: "Notes",
       type: "textarea",
       required: false,
       helpText: "Anything the tech should know before calling."
+    },
+    {
+      id: "hazards",
+      label: "Hazards",
+      type: "text",
+      required: false,
+      helpText: "Gas leak, flooding, unsafe conditions, etc."
+    },
+    {
+      id: "access_instructions",
+      label: "Access instructions",
+      type: "textarea",
+      required: false,
+      helpText: "Gate codes, which door, dogs, locked areas."
+    },
+    {
+      id: "anyone_onsite",
+      label: "Anyone on site?",
+      type: "text",
+      required: false,
+      helpText: "Is someone currently at the location?"
+    },
+    {
+      id: "equipment_involved",
+      label: "Equipment involved",
+      type: "text",
+      required: false,
+      helpText: "Furnace model, water heater type, etc."
+    },
+    {
+      id: "company_site_name",
+      label: "Company / site name",
+      type: "text",
+      required: false,
+      helpText: "Business name or site identifier if commercial."
+    },
+    {
+      id: "alternate_number",
+      label: "Alternate number",
+      type: "phone",
+      required: false,
+      helpText: "Second number to reach the caller."
     }
   ],
   messageTemplates: {
@@ -1141,7 +1190,9 @@ function createJobFromPayload(payload, config) {
     // Comms + audit
     humanReviewFlags: [],
     slackThreadTs: null,
-    customerCallbacks: []
+    customerCallbacks: [],
+    // Concurrency
+    version: 1
   };
 
   const matchedRule = findMatchingRule(job, config);
@@ -1373,11 +1424,18 @@ async function dispatchBatch(job, batch, config) {
       continue;
     }
 
+    // Idempotency: skip if we already dispatched to this contact at this step
+    const idemSms = `idem_${job.id}_${contact.id}_${job.escalationStep}_sms`;
+    const idemCall = `idem_${job.id}_${contact.id}_${job.escalationStep}_call`;
+    const hasActiveSms = (job.attempts || []).some((a) => a.idempotencyKey === idemSms && a.status !== "failed");
+    const hasActiveCall = (job.attempts || []).some((a) => a.idempotencyKey === idemCall && a.status !== "failed");
+
     // Send SMS if enabled (default to true)
-    if (batch.strategy.sendSms !== false && contact.renderedSms && smsPhone) {
+    if (batch.strategy.sendSms !== false && contact.renderedSms && smsPhone && !hasActiveSms) {
       const smsResult = await sendTwilioSms(config, smsPhone, contact.renderedSms);
       const attempt = {
         id: `attempt_${randomUUID()}`,
+        idempotencyKey: idemSms,
         at: new Date().toISOString(),
         contactId: contact.id,
         channel: "sms",
@@ -1387,6 +1445,8 @@ async function dispatchBatch(job, batch, config) {
       job.attempts.push(attempt);
       appendTimeline(job, "attempt-logged", { ...attempt, twilioSid: smsResult.sid });
       results.push({ contactId: contact.id, channel: "sms", result: smsResult });
+    } else if (hasActiveSms) {
+      log("dispatch-dedup", { jobId: job.id, contactId: contact.id, channel: "sms", key: idemSms });
     }
 
     // Start outbound call via Vapi
@@ -1394,10 +1454,15 @@ async function dispatchBatch(job, batch, config) {
       log("dispatch-skip-no-call-phone", { jobId: job.id, contactId: contact.id, contactName: contact.name });
       continue;
     }
+    if (hasActiveCall) {
+      log("dispatch-dedup", { jobId: job.id, contactId: contact.id, channel: "call", key: idemCall });
+      continue;
+    }
     const callResult = await startVapiOutboundCall(config, callPhone, job, contact.id, contact.name);
     if (!callResult.skipped) {
       const attempt = {
         id: `attempt_${randomUUID()}`,
+        idempotencyKey: idemCall,
         at: new Date().toISOString(),
         contactId: contact.id,
         channel: "call",
@@ -1782,9 +1847,34 @@ async function saveJobs(jobs) {
     return;
   }
   for (const job of jobs) {
+    job.version = (job.version || 0) + 1;
     await sql`INSERT INTO pv_jobs (id, data, created_at, updated_at) VALUES (${job.id}, ${JSON.stringify(job)}, ${job.createdAt}, NOW())
               ON CONFLICT (id) DO UPDATE SET data = ${JSON.stringify(job)}, updated_at = NOW()`;
   }
+}
+
+async function saveJobWithLock(job) {
+  const sql = getDb();
+  const expectedVersion = job.version || 1;
+  job.version = expectedVersion + 1;
+  if (!sql) {
+    // File-based: no real locking, just save
+    const jobs = await readJson(JOBS_FILE, []);
+    const idx = jobs.findIndex((j) => j.id === job.id);
+    if (idx >= 0) jobs[idx] = job; else jobs.push(job);
+    await writeJson(JOBS_FILE, jobs);
+    return true;
+  }
+  const rows = await sql`
+    UPDATE pv_jobs SET data = ${JSON.stringify(job)}, updated_at = NOW()
+    WHERE id = ${job.id} AND (data->>'version')::int = ${expectedVersion}
+    RETURNING id
+  `;
+  if (rows.length === 0) {
+    job.version = expectedVersion; // revert
+    return false;
+  }
+  return true;
 }
 
 function sanitizeConfigForUi(config) {
