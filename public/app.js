@@ -1,7 +1,11 @@
 const state = {
   config: null,
   jobs: [],
-  activeTab: "jobs"
+  activeTab: "jobs",
+  selectedJobId: null,
+  selectedJob: null,
+  lastEventTime: "",
+  events: []
 };
 
 const elements = {
@@ -335,6 +339,24 @@ function renderRoutingRules() {
   elements.routingRules.replaceChildren(...state.config.routingRules.map(createRuleCard));
 }
 
+function jobStatusLabel(job) {
+  const s = job.state;
+  if (!s) return "open";
+  if (s === "DISPATCH_CONFIRMED_INTERNAL" || s === "DISPATCH_CONFIRMED_SUBCONTRACTOR") return "accepted";
+  if (s === "HUMAN_REVIEW_REQUIRED") return "paused";
+  if (s === "CLOSED" || s === "UNABLE_TO_DISPATCH") return "closed";
+  return "open";
+}
+
+function timeAgo(isoString) {
+  if (!isoString) return "";
+  const diff = Date.now() - new Date(isoString).getTime();
+  if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return new Date(isoString).toLocaleDateString();
+}
+
 function renderJobs() {
   if (!state.jobs.length) {
     const hint = document.createElement("p");
@@ -347,49 +369,41 @@ function renderJobs() {
   const articles = state.jobs.map((job) => {
     const article = document.createElement("article");
     article.className = "job-card";
-    const acceptedBy = job.acceptedBy?.contactName ? `Accepted by ${job.acceptedBy.contactName}` : "Unassigned";
-    const attempts = (job.attempts || [])
-      .slice(-3)
-      .map((attempt) => `${attempt.channel}:${attempt.status}:${attempt.contactId}`)
-      .join(" | ");
+    article.onclick = () => openJobDetail(job.id);
 
     const head = document.createElement("div");
     head.className = "job-head";
 
     const headLeft = document.createElement("div");
-    const eyebrow = document.createElement("p");
-    eyebrow.className = "eyebrow";
-    eyebrow.textContent = job.finalStatus || job.state || job.status || "open";
+    const badge = document.createElement("span");
+    badge.className = "state-badge";
+    badge.dataset.status = jobStatusLabel(job);
+    badge.textContent = job.finalStatus || job.state || "open";
     const title = document.createElement("h3");
-    title.textContent = `${job.issueType || "Unspecified issue"} · ${job.locationArea || "Unknown area"}`;
-    headLeft.append(eyebrow, title);
+    title.textContent = `${job.issueType || "Unspecified"} · ${job.locationArea || "Unknown"}`;
+    headLeft.append(badge, title);
 
     const timestamp = document.createElement("span");
-    timestamp.textContent = new Date(job.createdAt).toLocaleString();
+    timestamp.textContent = timeAgo(job.createdAt);
     head.append(headLeft, timestamp);
 
     const summary = document.createElement("p");
     summary.textContent = job.summary || "No summary";
 
-    const callerMeta = document.createElement("p");
-    callerMeta.className = "job-meta";
-    callerMeta.textContent = `Caller: ${job.callerName || "-"} · Callback: ${job.callbackNumber || "-"} · Rule: ${job.matchedRuleId || "none"}`;
+    const meta = document.createElement("p");
+    meta.className = "job-meta";
+    const acceptedBy = job.acceptedBy?.contactName ? `${job.acceptedBy.contactName}` : "unassigned";
+    const attemptCount = (job.attempts || []).length;
+    meta.textContent = `${job.callerName || "-"} · ${acceptedBy} · ${attemptCount} attempt${attemptCount !== 1 ? "s" : ""}`;
 
-    const acceptedMeta = document.createElement("p");
-    acceptedMeta.className = "job-meta";
-    acceptedMeta.textContent = acceptedBy;
+    const escalation = document.createElement("p");
+    escalation.className = "job-meta";
+    if (job.escalationDueAt) {
+      const remaining = Math.max(0, Math.round((new Date(job.escalationDueAt).getTime() - Date.now()) / 1000));
+      escalation.textContent = remaining > 0 ? `Escalation in ${remaining}s` : "Escalation due";
+    }
 
-    const attemptsMeta = document.createElement("p");
-    attemptsMeta.className = "job-meta";
-    attemptsMeta.textContent = `Recent attempts: ${attempts || "none"}`;
-
-    const escalationMeta = document.createElement("p");
-    escalationMeta.className = "job-meta";
-    escalationMeta.textContent = job.escalationDueAt
-      ? `Next escalation: ${new Date(job.escalationDueAt).toLocaleString()}`
-      : "Next escalation: none";
-
-    article.append(head, summary, callerMeta, acceptedMeta, attemptsMeta, escalationMeta);
+    article.append(head, summary, meta, escalation);
     return article;
   });
 
@@ -587,8 +601,272 @@ function wireActions() {
   };
 }
 
+// --- Polling ---
+
+let pollTimer = null;
+
+function startPolling(ms = 5000) {
+  stopPolling();
+  pollTimer = setInterval(() => {
+    loadAll().catch(() => {});
+    if (state.activeTab === "jobs" && !state.selectedJobId) loadEvents().catch(() => {});
+  }, ms);
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+// --- Event feed ---
+
+const EVENT_LABELS = {
+  "job-created": (e) => `Job created (${e.issueType || "service"})`,
+  "state-change": (e) => `State \u2192 ${e.to}`,
+  "attempt-logged": (e) => `${e.channel || "?"} to ${e.contactId} (${e.status})`,
+  "customer-callback": (e) => `Customer callback: ${e.type} (${e.outcome || "?"})`,
+  "call-ended": (e) => `Call ended: ${e.callStatus || "?"}`,
+  "job-accepted": (e) => `Accepted by ${e.contactName || e.contactId}`,
+  "job-declined": (e) => `Declined by ${e.contactId}`,
+  "human-review-flagged": (e) => `REVIEW NEEDED: ${e.trigger}`,
+  "human-review-resolved": (e) => `Review resolved: ${e.trigger}`,
+  "sub-cancelled": () => "Sub cancelled",
+  "en-route-confirmed": () => "Sub marked en route",
+  "workflow-resumed": (e) => `Workflow resumed \u2192 ${e.resumedTo}`,
+  "slack-summary": () => "Slack posted",
+  "manual-close": () => "Manually closed"
+};
+
+const EVENT_SEVERITY = {
+  "job-created": "info", "state-change": "info", "attempt-logged": "info",
+  "customer-callback": "success", "job-accepted": "success", "en-route-confirmed": "success",
+  "workflow-resumed": "success", "slack-summary": "info", "manual-close": "info",
+  "call-ended": "warning", "job-declined": "warning", "sub-cancelled": "warning",
+  "human-review-flagged": "error", "human-review-resolved": "success"
+};
+
+async function loadEvents() {
+  const since = state.lastEventTime || new Date(Date.now() - 3600000).toISOString();
+  const events = await fetchJson(`/api/events?since=${encodeURIComponent(since)}&limit=30`);
+  if (events.length) {
+    state.events = events;
+    state.lastEventTime = events[0].at;
+    renderEventFeed();
+  }
+}
+
+function renderEventFeed() {
+  const feed = document.querySelector("#event-feed");
+  const countBadge = document.querySelector("#event-count");
+  if (!feed) return;
+
+  const rows = state.events.slice(0, 25).map((evt) => {
+    const row = document.createElement("div");
+    row.className = "event-row";
+    row.dataset.severity = EVENT_SEVERITY[evt.type] || "info";
+    row.onclick = () => openJobDetail(evt.jobId);
+
+    const time = document.createElement("span");
+    time.className = "evt-time";
+    time.textContent = new Date(evt.at).toLocaleTimeString();
+
+    const jobId = document.createElement("span");
+    jobId.className = "evt-job";
+    jobId.textContent = evt.jobId?.slice(0, 12) || "?";
+
+    const text = document.createElement("span");
+    text.className = "evt-text";
+    const labelFn = EVENT_LABELS[evt.type];
+    text.textContent = labelFn ? labelFn(evt) : evt.type;
+
+    row.append(time, jobId, text);
+    return row;
+  });
+
+  feed.replaceChildren(...rows);
+  if (countBadge) countBadge.textContent = state.events.length > 0 ? String(state.events.length) : "";
+}
+
+// --- Job detail panel ---
+
+async function openJobDetail(jobId) {
+  state.selectedJobId = jobId;
+  try {
+    state.selectedJob = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}`);
+  } catch {
+    state.selectedJob = state.jobs.find((j) => j.id === jobId) || null;
+  }
+  document.querySelector("#jobs-list-view").style.display = "none";
+  const panel = document.querySelector("#job-detail");
+  panel.style.display = "block";
+  renderJobDetail();
+}
+
+function closeJobDetail() {
+  state.selectedJobId = null;
+  state.selectedJob = null;
+  document.querySelector("#job-detail").style.display = "none";
+  document.querySelector("#jobs-list-view").style.display = "";
+}
+
+function renderJobDetail() {
+  const job = state.selectedJob;
+  if (!job) return;
+  const container = document.querySelector("#job-detail-content");
+  const status = jobStatusLabel(job);
+  const contactMap = new Map((state.config?.contacts || []).map((c) => [c.id, c]));
+
+  let html = `<div class="panel">`;
+
+  // Header
+  html += `<div class="detail-header">
+    <div>
+      <span class="state-badge" data-status="${status}">${job.finalStatus || job.state || "open"}</span>
+      <h2>${job.issueType || "Service request"} &middot; ${job.locationArea || "Unknown"}</h2>
+      <p class="job-meta">${job.id} &middot; ${new Date(job.createdAt).toLocaleString()} &middot; Rule: ${job.matchedRuleId || "none"}</p>
+    </div>
+  </div>`;
+
+  // Caller info grid
+  html += `<div class="detail-grid">`;
+  const fields = [
+    ["Caller", job.callerName], ["Callback", job.callbackNumber], ["Alternate", job.alternateNumber],
+    ["Address", job.serviceAddress], ["Area", job.locationArea], ["Issue", job.issueType],
+    ["Urgency", job.urgency], ["Severity", job.severity], ["Hazards", job.hazards],
+    ["Company", job.companySiteName], ["Access", job.accessInstructions], ["On site", job.anyoneOnsite ? "Yes" : ""]
+  ];
+  for (const [label, value] of fields) {
+    if (!value) continue;
+    html += `<div class="detail-field"><div class="field-label">${label}</div><div class="field-value">${escapeHtml(String(value))}</div></div>`;
+  }
+  html += `</div>`;
+
+  // Summary
+  if (job.summary) html += `<p>${escapeHtml(job.summary)}</p>`;
+
+  // Dispatch status
+  if (job.acceptedBy) {
+    html += `<div class="detail-grid" style="margin-top:12px">
+      <div class="detail-field"><div class="field-label">Accepted by</div><div class="field-value">${escapeHtml(job.acceptedBy.contactName || job.acceptedBy.contactId)}</div></div>
+      <div class="detail-field"><div class="field-label">Channel</div><div class="field-value">${job.acceptedBy.channel}</div></div>
+      <div class="detail-field"><div class="field-label">ETA</div><div class="field-value">${job.acceptedBy.etaMinutes ? job.acceptedBy.etaMinutes + " min" : "-"}</div></div>
+    </div>`;
+  }
+  if (job.escalationDueAt && status === "open") {
+    const remaining = Math.max(0, Math.round((new Date(job.escalationDueAt).getTime() - Date.now()) / 1000));
+    html += `<p class="job-meta" style="margin-top:8px">Escalation step ${job.escalationStep || 0} &middot; ${remaining > 0 ? remaining + "s remaining" : "due now"}</p>`;
+  }
+
+  // Attempts table
+  const attempts = job.attempts || [];
+  if (attempts.length) {
+    html += `<div class="detail-section"><h3>Dispatch Attempts (${attempts.length})</h3>`;
+    html += `<table class="attempts-table"><thead><tr><th>Time</th><th>Contact</th><th>Channel</th><th>Status</th><th>Notes</th></tr></thead><tbody>`;
+    for (const a of attempts) {
+      const contact = contactMap.get(a.contactId);
+      const name = contact ? contact.name : a.contactId;
+      html += `<tr>
+        <td>${new Date(a.at).toLocaleTimeString()}</td>
+        <td>${escapeHtml(name)}</td>
+        <td>${a.channel}</td>
+        <td class="status-${a.status}">${a.status}</td>
+        <td>${escapeHtml(a.notes || "")}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
+
+  // Customer callbacks
+  const callbacks = job.customerCallbacks || [];
+  if (callbacks.length) {
+    html += `<div class="detail-section"><h3>Customer Callbacks (${callbacks.length})</h3>`;
+    html += `<table class="attempts-table"><thead><tr><th>Time</th><th>Type</th><th>Outcome</th><th>Error</th></tr></thead><tbody>`;
+    for (const cb of callbacks) {
+      html += `<tr>
+        <td>${new Date(cb.at).toLocaleTimeString()}</td>
+        <td>${cb.type}</td>
+        <td class="status-${cb.outcome === "completed" ? "accepted" : "failed"}">${cb.outcome}</td>
+        <td>${escapeHtml(cb.error || "")}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
+
+  // Timeline
+  const timeline = (job.timeline || []).slice().reverse();
+  if (timeline.length) {
+    html += `<div class="detail-section"><h3>Timeline (${timeline.length} events)</h3><div class="timeline-list">`;
+    for (const evt of timeline) {
+      const severity = EVENT_SEVERITY[evt.type] || "info";
+      const labelFn = EVENT_LABELS[evt.type];
+      const label = labelFn ? labelFn(evt) : evt.type;
+      html += `<div class="timeline-item" data-severity="${severity}">
+        <span class="tl-time">${new Date(evt.at).toLocaleTimeString()}</span>
+        <span class="tl-type">${escapeHtml(label)}</span>
+        <span class="tl-detail">${evt.actor || ""}</span>
+      </div>`;
+    }
+    html += `</div></div>`;
+  }
+
+  // Action buttons
+  const actions = [];
+  if (job.state === "HUMAN_REVIEW_REQUIRED") {
+    const unresolvedFlags = (job.humanReviewFlags || []).filter((f) => !f.resolved);
+    for (const flag of unresolvedFlags) {
+      actions.push(`<button class="button button-warning" onclick="resolveReview('${job.id}','${flag.trigger}')">Resolve: ${escapeHtml(flag.trigger)}</button>`);
+    }
+  }
+  if (job.state === "PROVISIONAL_SUB_ASSIGNMENT" && !job.enRouteConfirmedAt) {
+    actions.push(`<button class="button button-success" onclick="markEnRoute('${job.id}')">Mark Sub En Route</button>`);
+  }
+  if (["DISPATCH_CONFIRMED_INTERNAL", "DISPATCH_CONFIRMED_SUBCONTRACTOR", "UNABLE_TO_DISPATCH"].includes(job.state)) {
+    actions.push(`<button class="button button-secondary" onclick="closeJob('${job.id}')">Close Job</button>`);
+  }
+  if (actions.length) {
+    html += `<div class="detail-actions">${actions.join("")}</div>`;
+  }
+
+  html += `</div>`;
+  container.innerHTML = html;
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// --- Action handlers ---
+
+async function resolveReview(jobId, trigger) {
+  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/resolve-review`, {
+    method: "POST",
+    body: JSON.stringify({ trigger, resolvedBy: "dispatcher" })
+  });
+  openJobDetail(jobId);
+}
+
+async function markEnRoute(jobId) {
+  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/en-route`, {
+    method: "POST",
+    body: JSON.stringify({})
+  });
+  openJobDetail(jobId);
+}
+
+async function closeJob(jobId) {
+  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/close`, {
+    method: "POST",
+    body: JSON.stringify({ closedBy: "dispatcher" })
+  });
+  openJobDetail(jobId);
+}
+
 loadAll()
-  .then(wireActions)
+  .then(() => {
+    wireActions();
+    document.querySelector("#job-detail-back").onclick = closeJobDetail;
+    startPolling();
+    loadEvents().catch(() => {});
+  })
   .catch((error) => {
     setSaveStatus(error.message, "error");
   });

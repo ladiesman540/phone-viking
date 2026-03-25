@@ -495,3 +495,306 @@ details.panel[open] > summary h2::after {
     padding: 10px 14px;
   }
 }
+
+/* ---- Supervisor Console ---- */
+
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(33, 92, 53, 0.12);
+  color: #215c35;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2e9b52;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+.live-badge.paused {
+  background: rgba(198, 93, 46, 0.12);
+  color: var(--accent-strong);
+}
+
+.live-badge.paused .live-dot {
+  background: var(--accent);
+  animation: none;
+}
+
+/* Event feed */
+
+.event-feed-panel summary h2 { display: inline; }
+
+.event-count-badge {
+  font-size: 0.72rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 600;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+
+.event-feed {
+  max-height: 260px;
+  overflow-y: auto;
+  display: grid;
+  gap: 2px;
+  padding: 4px 0;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.event-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 100ms;
+  border-left: 3px solid transparent;
+}
+
+.event-row:hover {
+  background: rgba(15, 23, 32, 0.04);
+}
+
+.event-row .evt-time {
+  color: var(--muted);
+  flex-shrink: 0;
+  min-width: 72px;
+}
+
+.event-row .evt-job {
+  color: var(--accent-strong);
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.event-row .evt-text {
+  color: var(--ink);
+  flex: 1;
+}
+
+.event-row[data-severity="success"] { border-left-color: #2e9b52; }
+.event-row[data-severity="error"]   { border-left-color: var(--danger); }
+.event-row[data-severity="warning"] { border-left-color: #c69a2e; }
+.event-row[data-severity="info"]    { border-left-color: var(--line); }
+
+/* Job cards — clickable */
+
+.job-card {
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.job-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 32px rgba(15, 23, 32, 0.1);
+}
+
+/* State badges */
+
+.state-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+.state-badge[data-status="open"]     { background: rgba(46, 113, 198, 0.12); color: #2e5fa0; }
+.state-badge[data-status="accepted"] { background: rgba(33, 92, 53, 0.12); color: #215c35; }
+.state-badge[data-status="paused"]   { background: rgba(198, 154, 46, 0.15); color: #8a6d1e; }
+.state-badge[data-status="closed"]   { background: rgba(15, 23, 32, 0.08); color: var(--muted); }
+
+/* Job detail panel */
+
+.job-detail-panel {
+  animation: detail-in 200ms ease;
+}
+
+@keyframes detail-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.job-detail-back-btn {
+  margin-bottom: 16px;
+}
+
+.detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.detail-header h2 {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+
+.detail-header .state-badge {
+  flex-shrink: 0;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.detail-field {
+  font-size: 0.88rem;
+}
+
+.detail-field .field-label {
+  color: var(--muted);
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 2px;
+}
+
+.detail-field .field-value {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.detail-section {
+  margin-top: 20px;
+}
+
+.detail-section h3 {
+  margin: 0 0 10px;
+  font-size: 0.88rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+
+/* Timeline in detail */
+
+.timeline-list {
+  display: grid;
+  gap: 0;
+  border-left: 2px solid var(--line);
+  margin-left: 8px;
+  padding-left: 18px;
+}
+
+.timeline-item {
+  position: relative;
+  padding: 8px 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.timeline-item::before {
+  content: "";
+  position: absolute;
+  left: -23px;
+  top: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line);
+  border: 2px solid var(--bg-a);
+}
+
+.timeline-item[data-severity="success"]::before { background: #2e9b52; }
+.timeline-item[data-severity="error"]::before   { background: var(--danger); }
+.timeline-item[data-severity="warning"]::before  { background: #c69a2e; }
+
+.timeline-item .tl-time {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-family: var(--font-mono);
+}
+
+.timeline-item .tl-type {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.timeline-item .tl-detail {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+/* Attempts table */
+
+.attempts-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.attempts-table th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+}
+
+.attempts-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgba(15, 23, 32, 0.06);
+  color: var(--ink);
+}
+
+.attempts-table .status-queued   { color: #2e5fa0; }
+.attempts-table .status-ringing  { color: #c69a2e; }
+.attempts-table .status-accepted { color: #215c35; }
+.attempts-table .status-declined { color: var(--danger); }
+.attempts-table .status-failed   { color: var(--danger); }
+
+/* Detail action buttons */
+
+.detail-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.button-warning {
+  background: rgba(198, 154, 46, 0.14);
+  color: #8a6d1e;
+}
+
+.button-success {
+  background: rgba(33, 92, 53, 0.12);
+  color: #215c35;
+}

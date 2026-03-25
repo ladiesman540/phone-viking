@@ -30,15 +30,34 @@
       <main>
         <div class="tab-panel active" data-tab="jobs">
           <div class="tab-intro">
-            <h2>Jobs</h2>
-            <p>Every time a caller reaches the system, a job gets created here. You can see who called, what they need, which routing rule matched, where the escalation timer is, and whether a tech has accepted the job. This is your day-to-day view.</p>
+            <h2>Operations</h2>
+            <p>Live dispatch view. Jobs auto-refresh every 5 seconds. Click any job to see the full case file with timeline, dispatch attempts, and action buttons.</p>
+            <div class="live-badge" id="live-badge"><span class="live-dot"></span> Live</div>
           </div>
-          <div class="tab-stack">
+
+          <!-- Job detail panel (hidden by default) -->
+          <div id="job-detail" class="job-detail-panel" style="display:none">
+            <button id="job-detail-back" class="button button-secondary job-detail-back-btn">Back to list</button>
+            <div id="job-detail-content"></div>
+          </div>
+
+          <!-- Jobs list view -->
+          <div id="jobs-list-view" class="tab-stack">
+            <details class="panel event-feed-panel" open>
+              <summary class="panel-header clickable">
+                <div>
+                  <p class="eyebrow">Activity</p>
+                  <h2>Event Feed <span id="event-count" class="event-count-badge"></span></h2>
+                </div>
+              </summary>
+              <div id="event-feed" class="event-feed"></div>
+            </details>
+
             <section class="panel">
               <div class="panel-header">
                 <div>
-                  <p class="eyebrow">Live</p>
-                  <h2>Recent Requests</h2>
+                  <p class="eyebrow">Dispatch</p>
+                  <h2>Active Jobs</h2>
                 </div>
               </div>
               <div id="jobs" class="stack"></div>

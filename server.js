@@ -1951,7 +1951,7 @@ function assertCreateJobPayload(payload) {
   assertString(payload.summary || payload.notes, "summary");
 }
 
-async function handleApi(req, res, pathname) {
+async function handleApi(req, res, pathname, url) {
   const config = await loadConfig();
   const jobs = await loadJobs();
 
@@ -2478,6 +2478,44 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { success: true, job });
   }
 
+  // Single job detail
+  if (req.method === "GET" && pathname.startsWith("/api/jobs/") && pathname.split("/").length === 4) {
+    const jobId = pathname.split("/")[3];
+    const job = jobs.find((j) => j.id === jobId);
+    if (!job) return sendJson(res, 404, { error: "Job not found." });
+    return sendJson(res, 200, job);
+  }
+
+  // Cross-job event feed
+  if (req.method === "GET" && pathname === "/api/events") {
+    const since = normalizeString(url.searchParams.get("since"));
+    const limit = clampInteger(url.searchParams.get("limit"), 1, 200, 50);
+    const sinceMs = since ? new Date(since).getTime() : 0;
+    const events = [];
+    for (const job of jobs) {
+      for (const evt of (job.timeline || [])) {
+        if (new Date(evt.at).getTime() > sinceMs) {
+          events.push({ ...evt, jobId: job.id, issueType: job.issueType, callerName: job.callerName });
+        }
+      }
+    }
+    events.sort((a, b) => b.at.localeCompare(a.at));
+    return sendJson(res, 200, events.slice(0, limit));
+  }
+
+  // Manual close job
+  if (req.method === "POST" && pathname.startsWith("/api/jobs/") && pathname.endsWith("/close")) {
+    const jobId = pathname.split("/")[3];
+    const job = jobs.find((j) => j.id === jobId);
+    if (!job) return sendJson(res, 404, { error: "Job not found." });
+    const body = await parseBody(req);
+    closeJobIfTerminal(job, normalizeString(body.finalStatus));
+    clearEscalation(job.id);
+    appendTimeline(job, "manual-close", { by: normalizeString(body.closedBy || "dispatcher"), reason: normalizeString(body.reason) }, "dispatcher");
+    await saveJobs(jobs);
+    return sendJson(res, 200, { success: true, job });
+  }
+
   sendJson(res, 404, { error: "Not found." });
 }
 
@@ -2519,7 +2557,7 @@ async function handler(req, res) {
       return;
     }
     if (url.pathname.startsWith("/api/")) {
-      return await handleApi(req, res, url.pathname);
+      return await handleApi(req, res, url.pathname, url);
     }
     return await serveStatic(res, url.pathname);
   } catch (error) {
