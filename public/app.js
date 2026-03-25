@@ -162,6 +162,9 @@ function createContactCard(contact, index) {
     if (prop === "serviceAreasCsv") {
       value = (contact.serviceAreas || []).join(",");
     }
+    if (prop === "tradeTagsCsv") {
+      value = (contact.tradeTags || []).join(",");
+    }
 
     if (input.type === "checkbox") {
       if (prop === "active" || prop === "mayReplaceSubcontractor") {
@@ -176,6 +179,8 @@ function createContactCard(contact, index) {
     input.oninput = () => {
       if (prop === "serviceAreasCsv") {
         contact.serviceAreas = normalizeCsv(input.value);
+      } else if (prop === "tradeTagsCsv") {
+        contact.tradeTags = normalizeCsv(input.value);
       } else if (input.type === "checkbox") {
         contact[prop] = input.checked;
       } else if (input.type === "number") {
@@ -257,6 +262,9 @@ function createRuleCard(rule, index) {
     if (prop === "conditions.contactTypesCsv") {
       value = (rule.conditions.contactTypes || []).join(",");
     }
+    if (prop === "conditions.requiredTradeTagsCsv") {
+      value = (rule.conditions.requiredTradeTags || []).join(",");
+    }
     if (prop === "strategy.escalationSequenceJson") {
       value = JSON.stringify(rule.strategy.escalationSequence || [], null, 2);
     }
@@ -283,6 +291,8 @@ function createRuleCard(rule, index) {
         rule.conditions.areas = normalizeCsv(nextValue);
       } else if (prop === "conditions.contactTypesCsv") {
         rule.conditions.contactTypes = normalizeCsv(nextValue);
+      } else if (prop === "conditions.requiredTradeTagsCsv") {
+        rule.conditions.requiredTradeTags = normalizeCsv(nextValue);
       } else if (prop === "strategy.escalationSequenceJson") {
         try {
           rule.strategy.escalationSequence = JSON.parse(nextValue || "[]");
@@ -349,7 +359,7 @@ function renderJobs() {
     const headLeft = document.createElement("div");
     const eyebrow = document.createElement("p");
     eyebrow.className = "eyebrow";
-    eyebrow.textContent = job.state || job.status || "open";
+    eyebrow.textContent = job.finalStatus || job.state || job.status || "open";
     const title = document.createElement("h3");
     title.textContent = `${job.issueType || "Unspecified issue"} · ${job.locationArea || "Unknown area"}`;
     headLeft.append(eyebrow, title);
@@ -430,7 +440,8 @@ async function saveConfig() {
     notes: contact.notes || "",
     active: contact.active !== false,
     doNotUse: Boolean(contact.doNotUse),
-    mayReplaceSubcontractor: contact.mayReplaceSubcontractor !== false
+    mayReplaceSubcontractor: contact.mayReplaceSubcontractor !== false,
+    tradeTags: contact.tradeTags || []
   }));
 
   state.config.routingRules = state.config.routingRules.map((rule, index) => ({

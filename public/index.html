@@ -383,6 +383,10 @@
             <span>Notes</span>
             <input data-prop="notes" type="text" />
           </label>
+          <label class="wide">
+            <span>Trade tags (comma-separated) — e.g. hvac,plumbing,refrigeration</span>
+            <input data-prop="tradeTagsCsv" type="text" />
+          </label>
           <label class="checkbox">
             <input data-prop="active" type="checkbox" />
             <span>Active</span>
@@ -444,6 +448,10 @@
           <label>
             <span>Contact types</span>
             <input data-prop="conditions.contactTypesCsv" type="text" placeholder="tech,partner" />
+          </label>
+          <label class="wide">
+            <span>Required trade tags</span>
+            <input data-prop="conditions.requiredTradeTagsCsv" type="text" placeholder="hvac,plumbing" />
           </label>
           <label>
             <span>Initial tier</span>

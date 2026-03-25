@@ -373,3 +373,49 @@ test("safetyDisclaimer exists in defaultConfig.voiceScripts", () => {
   assert.ok(_internals.defaultConfig.voiceScripts.safetyDisclaimer);
   assert.ok(_internals.defaultConfig.voiceScripts.safetyDisclaimer.includes("911"));
 });
+
+// --- Phase 4 tests ---
+
+test("closeJobIfTerminal sets correct finalStatus per state", () => {
+  const job1 = { state: _internals.STATES.DISPATCH_CONFIRMED_INTERNAL, timeline: [] };
+  _internals.closeJobIfTerminal(job1);
+  assert.equal(job1.finalStatus, "INTERNAL_TECH_DISPATCHED");
+  assert.equal(job1.state, _internals.STATES.CLOSED);
+
+  const job2 = { state: _internals.STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, timeline: [] };
+  _internals.closeJobIfTerminal(job2);
+  assert.equal(job2.finalStatus, "SUBCONTRACTOR_DISPATCHED");
+
+  const job3 = { state: _internals.STATES.UNABLE_TO_DISPATCH, timeline: [] };
+  _internals.closeJobIfTerminal(job3);
+  assert.equal(job3.finalStatus, "UNABLE_TO_DISPATCH_AFTER_HOURS");
+});
+
+test("closeJobIfTerminal accepts overrideFinalStatus", () => {
+  const job = { state: _internals.STATES.DISPATCH_CONFIRMED_INTERNAL, timeline: [] };
+  _internals.closeJobIfTerminal(job, "ESCALATED_TO_HUMAN_SUPERVISOR");
+  assert.equal(job.finalStatus, "ESCALATED_TO_HUMAN_SUPERVISOR");
+});
+
+test("sanitizeContacts preserves tradeTags", () => {
+  const config = clone(_internals.defaultConfig);
+  config.contacts = [{
+    id: "c1", name: "Tech A", type: "tech", priorityTier: 1,
+    phone: "+15550000001", tradeTags: ["hvac", "plumbing"]
+  }];
+  const sanitized = _internals.sanitizeConfigInput(config, config);
+  assert.deepEqual(sanitized.contacts[0].tradeTags, ["hvac", "plumbing"]);
+});
+
+test("sanitizeRoutingRules preserves requiredTradeTags in conditions", () => {
+  const config = clone(_internals.defaultConfig);
+  config.contacts = [{ id: "c1", name: "A", type: "tech", phone: "+15550000001" }];
+  config.routingRules = [{
+    id: "r1", name: "HVAC only", active: true, sortOrder: 1,
+    conditions: { issueTypes: [], urgencies: [], areas: [], scheduleMode: "any", contactTypes: [], requiredTradeTags: ["hvac"] },
+    strategy: { initialTier: 1, batchSize: 1, escalateAfterMinutes: 3, escalationSequence: [] },
+    targetContactIds: ["c1"]
+  }];
+  const sanitized = _internals.sanitizeConfigInput(config, config);
+  assert.deepEqual(sanitized.routingRules[0].conditions.requiredTradeTags, ["hvac"]);
+});

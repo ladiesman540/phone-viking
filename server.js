@@ -821,6 +821,12 @@ function getRuleContacts(job, rule, config) {
       }
       return serviceAreas.some((item) => area.includes(item) || item.includes(area));
     })
+    .filter((contact) => {
+      const required = normalizeArray(conditions.requiredTradeTags).map((v) => v.toLowerCase());
+      if (!required.length) return true;
+      const tags = normalizeArray(contact.tradeTags).map((v) => v.toLowerCase());
+      return required.some((r) => tags.includes(r));
+    })
     .sort((left, right) => {
       const tierDelta = Number(left.priorityTier ?? 999) - Number(right.priorityTier ?? 999);
       if (tierDelta !== 0) {
@@ -1050,6 +1056,10 @@ async function handleLateAccept(job, config, contact, jobs) {
       log("late-accept-blocked", { jobId: job.id, contactId: contact.id, reason: "contact may not replace subcontractor" });
       return false;
     }
+    if (job.enRouteConfirmedAt) {
+      log("late-accept-blocked", { jobId: job.id, contactId: contact.id, reason: "subcontractor already en route" });
+      return false;
+    }
     const subContact = (config.contacts || []).find((c) => c.id === job.provisionalSubId);
     log("partner-superseded", { jobId: job.id, techContactId: contact.id, partnerId: job.provisionalSubId });
     transitionState(job, STATES.CANCEL_SUBCONTRACTOR_PENDING, { techContactId: contact.id });
@@ -1105,10 +1115,15 @@ async function handleSubReplacementTimeout(job, config, jobs) {
   await saveJobs(jobs);
 }
 
-function closeJobIfTerminal(job) {
-  const closeable = [STATES.DISPATCH_CONFIRMED_INTERNAL, STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR, STATES.UNABLE_TO_DISPATCH];
-  if (!closeable.includes(job.state)) return false;
-  transitionState(job, STATES.CLOSED, { reason: "final-callback-complete" });
+function closeJobIfTerminal(job, overrideFinalStatus) {
+  const statusMap = {
+    [STATES.DISPATCH_CONFIRMED_INTERNAL]: "INTERNAL_TECH_DISPATCHED",
+    [STATES.DISPATCH_CONFIRMED_SUBCONTRACTOR]: "SUBCONTRACTOR_DISPATCHED",
+    [STATES.UNABLE_TO_DISPATCH]: "UNABLE_TO_DISPATCH_AFTER_HOURS"
+  };
+  if (!statusMap[job.state]) return false;
+  job.finalStatus = overrideFinalStatus || statusMap[job.state];
+  transitionState(job, STATES.CLOSED, { reason: "final-callback-complete", finalStatus: job.finalStatus });
   return true;
 }
 
@@ -1196,6 +1211,8 @@ function createJobFromPayload(payload, config) {
     // Subcontractor tracking
     provisionalSubId: null,
     provisionalSubAt: null,
+    enRouteConfirmedAt: null,
+    finalStatus: null,
     // Dispatch history
     attempts: [],
     acceptedBy: null,
@@ -1656,7 +1673,8 @@ function sanitizeContacts(contacts = []) {
       doNotUse: Boolean(contact.doNotUse),
       mayReplaceSubcontractor: contact.mayReplaceSubcontractor !== false,
       blackoutPeriods: Array.isArray(contact.blackoutPeriods) ? contact.blackoutPeriods : [],
-      tempOverrides: typeof contact.tempOverrides === "object" && contact.tempOverrides ? contact.tempOverrides : {}
+      tempOverrides: typeof contact.tempOverrides === "object" && contact.tempOverrides ? contact.tempOverrides : {},
+      tradeTags: normalizeArray(contact.tradeTags)
     };
   });
 }
@@ -1692,7 +1710,8 @@ function sanitizeRoutingRules(routingRules = [], contacts = []) {
         urgencies: normalizeArray(conditions.urgencies),
         areas: normalizeArray(conditions.areas),
         scheduleMode: ALLOWED_SCHEDULE_MODES.has(scheduleMode) ? scheduleMode : "any",
-        contactTypes
+        contactTypes,
+        requiredTradeTags: normalizeArray(conditions.requiredTradeTags)
       },
       strategy: {
         ...strategy,
@@ -2413,6 +2432,17 @@ async function handleApi(req, res, pathname) {
     }
 
     return sendJson(res, 200, { success: true, ...lockResult.result });
+  }
+
+  // Mark subcontractor as en route
+  if (req.method === "POST" && pathname.startsWith("/api/jobs/") && pathname.endsWith("/en-route")) {
+    const jobId = pathname.split("/")[3];
+    const job = jobs.find((j) => j.id === jobId);
+    if (!job) return sendJson(res, 404, { error: "Job not found." });
+    job.enRouteConfirmedAt = new Date().toISOString();
+    appendTimeline(job, "en-route-confirmed", { contactId: job.provisionalSubId || job.acceptedBy?.contactId });
+    await saveJobs(jobs);
+    return sendJson(res, 200, { success: true, job });
   }
 
   // Resolve human review flag
