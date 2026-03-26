@@ -1,7 +1,7 @@
 const state = {
   config: null,
   jobs: [],
-  activeTab: "jobs",
+  activePage: "jobs",
   selectedJobId: null,
   selectedJob: null,
   lastEventTime: "",
@@ -10,13 +10,14 @@ const state = {
 
 const elements = {
   saveButton: document.querySelector("#save-config"),
-  refreshButton: document.querySelector("#refresh-all"),
   saveStatus: document.querySelector("#save-status"),
   intakeFields: document.querySelector("#intake-fields"),
   contacts: document.querySelector("#contacts"),
   routingRules: document.querySelector("#routing-rules"),
   jobs: document.querySelector("#jobs"),
-  jobResult: document.querySelector("#job-result")
+  jobResult: document.querySelector("#job-result"),
+  messagesBody: document.querySelector("#messages-body"),
+  messagesEmpty: document.querySelector("#messages-empty")
 };
 
 const templates = {
@@ -25,16 +26,20 @@ const templates = {
   rule: document.querySelector("#rule-template")
 };
 
-function switchTab(tabName) {
-  state.activeTab = tabName;
-  document.querySelectorAll(".tab-button").forEach((btn) => {
-    btn.classList.toggle("active", btn.dataset.tab === tabName);
+// ---- Navigation ----
+
+function switchPage(pageName) {
+  state.activePage = pageName;
+  document.querySelectorAll(".nav-item").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.page === pageName);
   });
-  document.querySelectorAll(".tab-panel").forEach((panel) => {
-    panel.classList.toggle("active", panel.dataset.tab === tabName);
+  document.querySelectorAll(".page").forEach((page) => {
+    page.classList.toggle("active", page.dataset.page === pageName);
   });
   render();
 }
+
+// ---- Utilities ----
 
 function setSaveStatus(message, mode = "idle") {
   elements.saveStatus.textContent = message;
@@ -42,10 +47,7 @@ function setSaveStatus(message, mode = "idle") {
 }
 
 function normalizeCsv(value) {
-  return String(value || "")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+  return String(value || "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function deepGet(object, path) {
@@ -57,300 +59,24 @@ function deepSet(object, path, value) {
   const last = parts.pop();
   let current = object;
   for (const part of parts) {
-    if (current[part] == null || typeof current[part] !== "object") {
-      current[part] = {};
-    }
+    if (current[part] == null || typeof current[part] !== "object") current[part] = {};
     current = current[part];
   }
   current[last] = value;
 }
 
 function slugify(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "") || "item";
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "item";
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 async function fetchJson(url, options = {}) {
-  const response = await fetch(url, {
-    headers: {
-      "Content-Type": "application/json"
-    },
-    ...options
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Request failed with ${response.status}`);
-  }
-
+  const response = await fetch(url, { headers: { "Content-Type": "application/json" }, ...options });
+  if (!response.ok) throw new Error((await response.text()) || `Request failed with ${response.status}`);
   return response.json();
-}
-
-function bindRootInputs() {
-  document.querySelectorAll("[data-path]").forEach((input) => {
-    const path = input.dataset.path;
-    let value;
-
-    if (path === "workspace.businessHours.daysCsv") {
-      value = (state.config.workspace.businessHours.days || []).join(",");
-    } else {
-      value = deepGet(state.config, path);
-    }
-
-    if (input.type === "checkbox") {
-      input.checked = Boolean(value);
-    } else {
-      input.value = value ?? "";
-    }
-
-    input.oninput = () => {
-      const nextValue =
-        input.type === "checkbox"
-          ? input.checked
-          : input.type === "number"
-            ? Number(input.value || 0)
-            : input.value;
-
-      if (path === "workspace.businessHours.daysCsv") {
-        state.config.workspace.businessHours.days = normalizeCsv(nextValue);
-      } else {
-        deepSet(state.config, path, nextValue);
-      }
-
-      setSaveStatus("Unsaved changes.", "dirty");
-    };
-  });
-}
-
-function createFieldCard(field, index) {
-  const node = templates.field.content.firstElementChild.cloneNode(true);
-
-  node.querySelectorAll("[data-prop]").forEach((input) => {
-    const prop = input.dataset.prop;
-    const value = field[prop];
-
-    if (input.type === "checkbox") {
-      input.checked = Boolean(value);
-    } else {
-      input.value = value ?? "";
-    }
-
-    input.oninput = () => {
-      field[prop] = input.type === "checkbox" ? input.checked : input.value;
-      if (prop === "id" && !field.id) {
-        field.id = `field_${index + 1}`;
-      }
-      setSaveStatus("Unsaved changes.", "dirty");
-    };
-  });
-
-  node.querySelector("[data-action='remove']").onclick = () => {
-    state.config.intakeFields.splice(index, 1);
-    render();
-    setSaveStatus("Unsaved changes.", "dirty");
-  };
-
-  return node;
-}
-
-function createContactCard(contact, index) {
-  const node = templates.contact.content.firstElementChild.cloneNode(true);
-  node.querySelector("h3").textContent = contact.name || `Contact ${index + 1}`;
-
-  node.querySelectorAll("[data-prop]").forEach((input) => {
-    const prop = input.dataset.prop;
-    let value = contact[prop];
-    if (prop === "serviceAreasCsv") {
-      value = (contact.serviceAreas || []).join(",");
-    }
-    if (prop === "tradeTagsCsv") {
-      value = (contact.tradeTags || []).join(",");
-    }
-    if (prop === "scenarioTiersJson") {
-      value = JSON.stringify(contact.scenarioTiers || [], null, 2);
-    }
-
-    if (input.type === "checkbox") {
-      if (prop === "active" || prop === "mayReplaceSubcontractor") {
-        input.checked = value !== false;
-      } else {
-        input.checked = Boolean(value);
-      }
-    } else {
-      input.value = value ?? "";
-    }
-
-    input.oninput = () => {
-      if (prop === "serviceAreasCsv") {
-        contact.serviceAreas = normalizeCsv(input.value);
-      } else if (prop === "tradeTagsCsv") {
-        contact.tradeTags = normalizeCsv(input.value);
-      } else if (prop === "scenarioTiersJson") {
-        try { contact.scenarioTiers = JSON.parse(input.value || "[]"); input.setCustomValidity(""); } catch { input.setCustomValidity("Invalid JSON"); }
-      } else if (input.type === "checkbox") {
-        contact[prop] = input.checked;
-      } else if (input.type === "number") {
-        contact[prop] = Number(input.value || 0);
-      } else {
-        contact[prop] = input.value;
-      }
-
-      if (!contact.id) {
-        contact.id = `contact_${slugify(contact.name || `contact_${index + 1}`)}`;
-      }
-      renderRoutingRules();
-      setSaveStatus("Unsaved changes.", "dirty");
-    };
-  });
-
-  node.querySelector("[data-action='remove']").onclick = () => {
-    state.config.contacts.splice(index, 1);
-    render();
-    setSaveStatus("Unsaved changes.", "dirty");
-  };
-
-  return node;
-}
-
-function createTargetsSelector(rule) {
-  const wrapper = document.createElement("div");
-  wrapper.className = "target-grid";
-  const selectedIds = new Set(rule.targetContactIds || []);
-
-  state.config.contacts.forEach((contact) => {
-    const label = document.createElement("label");
-    label.className = "target-pill";
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = selectedIds.has(contact.id);
-    checkbox.oninput = () => {
-      if (checkbox.checked) {
-        selectedIds.add(contact.id);
-      } else {
-        selectedIds.delete(contact.id);
-      }
-      rule.targetContactIds = Array.from(selectedIds);
-      setSaveStatus("Unsaved changes.", "dirty");
-    };
-
-    const text = document.createElement("span");
-    text.textContent = `${contact.name || "Unnamed"} (${contact.type || "tech"} / tier ${contact.priorityTier || 1})`;
-
-    label.append(checkbox, text);
-    wrapper.append(label);
-  });
-
-  if (!state.config.contacts.length) {
-    wrapper.innerHTML = '<p class="hint">Add contacts first, then choose which ones each rule can use.</p>';
-  }
-
-  return wrapper;
-}
-
-function createRuleCard(rule, index) {
-  const node = templates.rule.content.firstElementChild.cloneNode(true);
-  node.querySelector("h3").textContent = rule.name || `Rule ${index + 1}`;
-
-  node.querySelectorAll("[data-prop]").forEach((input) => {
-    const prop = input.dataset.prop;
-    let value = deepGet(rule, prop);
-
-    if (prop === "conditions.issueTypesCsv") {
-      value = (rule.conditions.issueTypes || []).join(",");
-    }
-    if (prop === "conditions.urgenciesCsv") {
-      value = (rule.conditions.urgencies || []).join(",");
-    }
-    if (prop === "conditions.areasCsv") {
-      value = (rule.conditions.areas || []).join(",");
-    }
-    if (prop === "conditions.contactTypesCsv") {
-      value = (rule.conditions.contactTypes || []).join(",");
-    }
-    if (prop === "conditions.requiredTradeTagsCsv") {
-      value = (rule.conditions.requiredTradeTags || []).join(",");
-    }
-    if (prop === "strategy.escalationSequenceJson") {
-      value = JSON.stringify(rule.strategy.escalationSequence || [], null, 2);
-    }
-
-    if (input.type === "checkbox") {
-      input.checked = Boolean(value);
-    } else {
-      input.value = value ?? "";
-    }
-
-    input.oninput = () => {
-      const nextValue =
-        input.type === "checkbox"
-          ? input.checked
-          : input.type === "number"
-            ? Number(input.value || 0)
-            : input.value;
-
-      if (prop === "conditions.issueTypesCsv") {
-        rule.conditions.issueTypes = normalizeCsv(nextValue);
-      } else if (prop === "conditions.urgenciesCsv") {
-        rule.conditions.urgencies = normalizeCsv(nextValue);
-      } else if (prop === "conditions.areasCsv") {
-        rule.conditions.areas = normalizeCsv(nextValue);
-      } else if (prop === "conditions.contactTypesCsv") {
-        rule.conditions.contactTypes = normalizeCsv(nextValue);
-      } else if (prop === "conditions.requiredTradeTagsCsv") {
-        rule.conditions.requiredTradeTags = normalizeCsv(nextValue);
-      } else if (prop === "strategy.escalationSequenceJson") {
-        try {
-          rule.strategy.escalationSequence = JSON.parse(nextValue || "[]");
-          input.setCustomValidity("");
-        } catch {
-          input.setCustomValidity("Invalid JSON");
-        }
-      } else {
-        deepSet(rule, prop, nextValue);
-      }
-
-      if (!rule.id) {
-        rule.id = `rule_${slugify(rule.name || `rule_${index + 1}`)}`;
-      }
-      setSaveStatus("Unsaved changes.", "dirty");
-    };
-  });
-
-  const targetContainer = node.querySelector("[data-role='targets']");
-  targetContainer.replaceChildren(createTargetsSelector(rule));
-
-  node.querySelector("[data-action='remove']").onclick = () => {
-    state.config.routingRules.splice(index, 1);
-    render();
-    setSaveStatus("Unsaved changes.", "dirty");
-  };
-
-  return node;
-}
-
-function renderIntakeFields() {
-  elements.intakeFields.replaceChildren(...state.config.intakeFields.map(createFieldCard));
-}
-
-function renderContacts() {
-  elements.contacts.replaceChildren(...state.config.contacts.map(createContactCard));
-}
-
-function renderRoutingRules() {
-  elements.routingRules.replaceChildren(...state.config.routingRules.map(createRuleCard));
-}
-
-function jobStatusLabel(job) {
-  const s = job.state;
-  if (!s) return "open";
-  if (s === "DISPATCH_CONFIRMED_INTERNAL" || s === "DISPATCH_CONFIRMED_SUBCONTRACTOR") return "accepted";
-  if (s === "HUMAN_REVIEW_REQUIRED") return "paused";
-  if (s === "CLOSED" || s === "UNABLE_TO_DISPATCH") return "closed";
-  return "open";
 }
 
 function timeAgo(isoString) {
@@ -362,153 +88,286 @@ function timeAgo(isoString) {
   return new Date(isoString).toLocaleDateString();
 }
 
+function jobStatusLabel(job) {
+  const s = job.state;
+  if (!s) return "open";
+  if (s === "DISPATCH_CONFIRMED_INTERNAL" || s === "DISPATCH_CONFIRMED_SUBCONTRACTOR") return "accepted";
+  if (s === "HUMAN_REVIEW_REQUIRED") return "paused";
+  if (s === "CLOSED" || s === "UNABLE_TO_DISPATCH") return "closed";
+  return "open";
+}
+
+// ---- Config binding ----
+
+function bindRootInputs() {
+  document.querySelectorAll("[data-path]").forEach((input) => {
+    const path = input.dataset.path;
+    let value;
+    if (path === "workspace.businessHours.daysCsv") {
+      value = (state.config.workspace.businessHours.days || []).join(",");
+    } else {
+      value = deepGet(state.config, path);
+    }
+    if (input.type === "checkbox") {
+      input.checked = Boolean(value);
+    } else {
+      input.value = value ?? "";
+    }
+    input.oninput = () => {
+      const nextValue = input.type === "checkbox" ? input.checked : input.type === "number" ? Number(input.value || 0) : input.value;
+      if (path === "workspace.businessHours.daysCsv") {
+        state.config.workspace.businessHours.days = normalizeCsv(nextValue);
+      } else {
+        deepSet(state.config, path, nextValue);
+      }
+      setSaveStatus("Unsaved changes.", "dirty");
+    };
+  });
+}
+
+// ---- Card builders ----
+
+function createFieldCard(field, index) {
+  const node = templates.field.content.firstElementChild.cloneNode(true);
+  node.querySelector("h3").textContent = field.label || field.id || `Field ${index + 1}`;
+  node.querySelectorAll("[data-prop]").forEach((input) => {
+    const prop = input.dataset.prop;
+    const value = field[prop];
+    if (input.type === "checkbox") { input.checked = Boolean(value); } else { input.value = value ?? ""; }
+    input.oninput = () => {
+      field[prop] = input.type === "checkbox" ? input.checked : input.value;
+      if (!field.id) field.id = `field_${index + 1}`;
+      setSaveStatus("Unsaved changes.", "dirty");
+    };
+  });
+  node.querySelector("[data-action='remove']").onclick = () => { state.config.intakeFields.splice(index, 1); render(); setSaveStatus("Unsaved changes.", "dirty"); };
+  return node;
+}
+
+function createContactCard(contact, index) {
+  const node = templates.contact.content.firstElementChild.cloneNode(true);
+  node.querySelector("h3").textContent = contact.name || `Contact ${index + 1}`;
+  node.querySelectorAll("[data-prop]").forEach((input) => {
+    const prop = input.dataset.prop;
+    let value = contact[prop];
+    if (prop === "serviceAreasCsv") value = (contact.serviceAreas || []).join(",");
+    if (prop === "tradeTagsCsv") value = (contact.tradeTags || []).join(",");
+    if (prop === "scenarioTiersJson") value = JSON.stringify(contact.scenarioTiers || [], null, 2);
+    if (input.type === "checkbox") {
+      if (prop === "active" || prop === "mayReplaceSubcontractor") { input.checked = value !== false; } else { input.checked = Boolean(value); }
+    } else { input.value = value ?? ""; }
+    input.oninput = () => {
+      if (prop === "serviceAreasCsv") { contact.serviceAreas = normalizeCsv(input.value); }
+      else if (prop === "tradeTagsCsv") { contact.tradeTags = normalizeCsv(input.value); }
+      else if (prop === "scenarioTiersJson") { try { contact.scenarioTiers = JSON.parse(input.value || "[]"); input.setCustomValidity(""); } catch { input.setCustomValidity("Invalid JSON"); } }
+      else if (input.type === "checkbox") { contact[prop] = input.checked; }
+      else if (input.type === "number") { contact[prop] = Number(input.value || 0); }
+      else { contact[prop] = input.value; }
+      if (!contact.id) contact.id = `contact_${slugify(contact.name || `contact_${index + 1}`)}`;
+      renderRoutingRules();
+      setSaveStatus("Unsaved changes.", "dirty");
+    };
+  });
+  node.querySelector("[data-action='remove']").onclick = () => { state.config.contacts.splice(index, 1); render(); setSaveStatus("Unsaved changes.", "dirty"); };
+  return node;
+}
+
+function createTargetsSelector(rule) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "target-grid";
+  const selectedIds = new Set(rule.targetContactIds || []);
+  state.config.contacts.forEach((contact) => {
+    const label = document.createElement("label");
+    label.className = "target-pill";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selectedIds.has(contact.id);
+    checkbox.oninput = () => {
+      if (checkbox.checked) selectedIds.add(contact.id); else selectedIds.delete(contact.id);
+      rule.targetContactIds = Array.from(selectedIds);
+      setSaveStatus("Unsaved changes.", "dirty");
+    };
+    const text = document.createElement("span");
+    text.textContent = `${contact.name || "Unnamed"} (${contact.type || "tech"} / tier ${contact.priorityTier || 1})`;
+    label.append(checkbox, text);
+    wrapper.append(label);
+  });
+  if (!state.config.contacts.length) wrapper.innerHTML = '<p class="hint">Add contacts first.</p>';
+  return wrapper;
+}
+
+function createRuleCard(rule, index) {
+  const node = templates.rule.content.firstElementChild.cloneNode(true);
+  node.querySelector("h3").textContent = rule.name || `Rule ${index + 1}`;
+  node.querySelectorAll("[data-prop]").forEach((input) => {
+    const prop = input.dataset.prop;
+    let value = deepGet(rule, prop);
+    if (prop === "conditions.issueTypesCsv") value = (rule.conditions.issueTypes || []).join(",");
+    if (prop === "conditions.urgenciesCsv") value = (rule.conditions.urgencies || []).join(",");
+    if (prop === "conditions.areasCsv") value = (rule.conditions.areas || []).join(",");
+    if (prop === "conditions.contactTypesCsv") value = (rule.conditions.contactTypes || []).join(",");
+    if (prop === "conditions.requiredTradeTagsCsv") value = (rule.conditions.requiredTradeTags || []).join(",");
+    if (prop === "strategy.escalationSequenceJson") value = JSON.stringify(rule.strategy.escalationSequence || [], null, 2);
+    if (input.type === "checkbox") { input.checked = Boolean(value); } else { input.value = value ?? ""; }
+    input.oninput = () => {
+      const nextValue = input.type === "checkbox" ? input.checked : input.type === "number" ? Number(input.value || 0) : input.value;
+      if (prop === "conditions.issueTypesCsv") rule.conditions.issueTypes = normalizeCsv(nextValue);
+      else if (prop === "conditions.urgenciesCsv") rule.conditions.urgencies = normalizeCsv(nextValue);
+      else if (prop === "conditions.areasCsv") rule.conditions.areas = normalizeCsv(nextValue);
+      else if (prop === "conditions.contactTypesCsv") rule.conditions.contactTypes = normalizeCsv(nextValue);
+      else if (prop === "conditions.requiredTradeTagsCsv") rule.conditions.requiredTradeTags = normalizeCsv(nextValue);
+      else if (prop === "strategy.escalationSequenceJson") { try { rule.strategy.escalationSequence = JSON.parse(nextValue || "[]"); input.setCustomValidity(""); } catch { input.setCustomValidity("Invalid JSON"); } }
+      else deepSet(rule, prop, nextValue);
+      if (!rule.id) rule.id = `rule_${slugify(rule.name || `rule_${index + 1}`)}`;
+      setSaveStatus("Unsaved changes.", "dirty");
+    };
+  });
+  node.querySelector("[data-role='targets']").replaceChildren(createTargetsSelector(rule));
+  node.querySelector("[data-action='remove']").onclick = () => { state.config.routingRules.splice(index, 1); render(); setSaveStatus("Unsaved changes.", "dirty"); };
+  return node;
+}
+
+// ---- Renderers ----
+
+function renderIntakeFields() { elements.intakeFields.replaceChildren(...state.config.intakeFields.map(createFieldCard)); }
+function renderContacts() { elements.contacts.replaceChildren(...state.config.contacts.map(createContactCard)); }
+function renderRoutingRules() { elements.routingRules.replaceChildren(...state.config.routingRules.map(createRuleCard)); }
+
 function renderJobs() {
   if (!state.jobs.length) {
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = "No jobs yet. Use the simulator or the voice-agent create-job function to create one.";
-    elements.jobs.replaceChildren(hint);
+    elements.jobs.innerHTML = '<p class="hint" style="padding:12px 0">No jobs yet. Use the simulator or call the intake number to create one.</p>';
     return;
   }
+  const cards = state.jobs.map((job) => {
+    const card = document.createElement("div");
+    card.className = "card job-card";
+    const status = jobStatusLabel(job);
+    card.dataset.status = status;
+    card.onclick = () => openJobDetail(job.id);
 
-  const articles = state.jobs.map((job) => {
-    const article = document.createElement("article");
-    article.className = "job-card";
-    article.onclick = () => openJobDetail(job.id);
+    const top = document.createElement("div");
+    top.className = "job-card-top";
 
-    const head = document.createElement("div");
-    head.className = "job-head";
-
-    const headLeft = document.createElement("div");
+    const left = document.createElement("div");
     const badge = document.createElement("span");
-    badge.className = "state-badge";
-    badge.dataset.status = jobStatusLabel(job);
-    badge.textContent = job.finalStatus || job.state || "open";
+    badge.className = `badge badge-${status}`;
+    badge.textContent = job.finalStatus || job.state || "OPEN";
     const title = document.createElement("h3");
-    title.textContent = `${job.issueType || "Unspecified"} · ${job.locationArea || "Unknown"}`;
-    headLeft.append(badge, title);
+    title.textContent = `${job.issueType || "Service"} · ${job.locationArea || "Unknown"}`;
+    left.append(badge, title);
 
-    const timestamp = document.createElement("span");
-    timestamp.textContent = timeAgo(job.createdAt);
-    head.append(headLeft, timestamp);
+    const time = document.createElement("span");
+    time.className = "meta";
+    time.textContent = timeAgo(job.createdAt);
+    top.append(left, time);
 
     const summary = document.createElement("p");
-    summary.textContent = job.summary || "No summary";
+    summary.className = "meta";
+    summary.style.marginTop = "6px";
+    summary.textContent = job.summary || "";
 
     const meta = document.createElement("p");
-    meta.className = "job-meta";
-    const acceptedBy = job.acceptedBy?.contactName ? `${job.acceptedBy.contactName}` : "unassigned";
-    const attemptCount = (job.attempts || []).length;
-    meta.textContent = `${job.callerName || "-"} · ${acceptedBy} · ${attemptCount} attempt${attemptCount !== 1 ? "s" : ""}`;
+    meta.className = "meta";
+    const assignee = job.acceptedBy?.contactName || "Unassigned";
+    const attempts = (job.attempts || []).length;
+    meta.textContent = `${job.callerName || "-"} · ${assignee} · ${attempts} attempt${attempts !== 1 ? "s" : ""}`;
 
-    const escalation = document.createElement("p");
-    escalation.className = "job-meta";
-    if (job.escalationDueAt) {
+    card.append(top, summary, meta);
+    if (job.escalationDueAt && status === "open") {
+      const esc = document.createElement("p");
+      esc.className = "meta";
       const remaining = Math.max(0, Math.round((new Date(job.escalationDueAt).getTime() - Date.now()) / 1000));
-      escalation.textContent = remaining > 0 ? `Escalation in ${remaining}s` : "Escalation due";
+      esc.textContent = remaining > 0 ? `Escalation in ${remaining}s` : "Escalation due";
+      card.append(esc);
     }
-
-    article.append(head, summary, meta, escalation);
-    return article;
+    return card;
   });
+  elements.jobs.replaceChildren(...cards);
+}
 
-  elements.jobs.replaceChildren(...articles);
+function renderMessages() {
+  const contactMap = new Map((state.config?.contacts || []).map((c) => [c.id, c]));
+  const messages = [];
+  for (const job of state.jobs) {
+    for (const a of (job.attempts || [])) {
+      const c = contactMap.get(a.contactId);
+      messages.push({ at: a.at, direction: "Outbound", recipient: c?.name || a.contactId, channel: a.channel, status: a.status, jobId: job.id });
+    }
+    for (const cb of (job.customerCallbacks || [])) {
+      messages.push({ at: cb.at, direction: "Outbound", recipient: job.callerName || job.callbackNumber || "-", channel: "call", status: cb.outcome, jobId: job.id });
+    }
+  }
+  messages.sort((a, b) => (b.at || "").localeCompare(a.at || ""));
+
+  if (!messages.length) {
+    elements.messagesBody.innerHTML = "";
+    elements.messagesEmpty.style.display = "";
+    return;
+  }
+  elements.messagesEmpty.style.display = "none";
+  elements.messagesBody.innerHTML = messages.slice(0, 100).map((m) => `<tr class="msg-row" onclick="openJobDetail('${escapeHtml(m.jobId)}');switchPage('jobs')">
+    <td>${m.at ? new Date(m.at).toLocaleString() : "-"}</td>
+    <td>${m.direction}</td>
+    <td>${escapeHtml(m.recipient)}</td>
+    <td>${m.channel}</td>
+    <td class="status-${m.status}">${m.status}</td>
+    <td style="color:var(--blue);cursor:pointer">${escapeHtml((m.jobId || "").slice(0, 12))}</td>
+  </tr>`).join("");
 }
 
 function render() {
   if (!state.config) return;
-  const tab = state.activeTab;
-  if (tab === "jobs") {
-    renderJobs();
-  } else if (tab === "contacts") {
-    renderContacts();
-  } else if (tab === "routing") {
-    bindRootInputs();
-    renderIntakeFields();
-    renderRoutingRules();
-  } else if (tab === "setup") {
-    bindRootInputs();
-  }
+  const page = state.activePage;
+  if (page === "jobs") renderJobs();
+  else if (page === "contacts") renderContacts();
+  else if (page === "messages") renderMessages();
+  else if (page === "intake") { bindRootInputs(); renderIntakeFields(); }
+  else if (page === "rules") { bindRootInputs(); renderRoutingRules(); }
+  else if (page === "workspace" || page === "integrations" || page === "templates") bindRootInputs();
 }
 
-async function loadAll() {
-  const [config, jobs] = await Promise.all([
-    fetchJson("/api/config"),
-    fetchJson("/api/jobs")
-  ]);
+// ---- Load / Save ----
 
+async function loadAll() {
+  const [config, jobs] = await Promise.all([fetchJson("/api/config"), fetchJson("/api/jobs")]);
   state.config = config;
   state.jobs = jobs;
   render();
-  setSaveStatus("Dashboard loaded.", "ok");
+  setSaveStatus("Loaded.", "ok");
 }
 
 async function saveConfig() {
-  setSaveStatus("Saving dashboard...", "busy");
+  setSaveStatus("Saving...", "busy");
   state.config.contacts = state.config.contacts.map((contact, index) => ({
     ...contact,
     id: contact.id || `contact_${slugify(contact.name || `contact_${index + 1}`)}`,
-    name: contact.name || "",
-    company: contact.company || "",
-    type: contact.type || "tech",
-    priorityTier: Number(contact.priorityTier || 1),
-    phone: contact.phone || "",
-    smsPhone: contact.smsPhone || contact.phone || "",
-    serviceAreas: contact.serviceAreas || [],
-    availability: contact.availability || "",
-    notes: contact.notes || "",
-    active: contact.active !== false,
-    doNotUse: Boolean(contact.doNotUse),
-    mayReplaceSubcontractor: contact.mayReplaceSubcontractor !== false,
-    tradeTags: contact.tradeTags || []
+    name: contact.name || "", company: contact.company || "", type: contact.type || "tech",
+    priorityTier: Number(contact.priorityTier || 1), phone: contact.phone || "",
+    smsPhone: contact.smsPhone || contact.phone || "", serviceAreas: contact.serviceAreas || [],
+    availability: contact.availability || "", notes: contact.notes || "",
+    active: contact.active !== false, doNotUse: Boolean(contact.doNotUse),
+    mayReplaceSubcontractor: contact.mayReplaceSubcontractor !== false, tradeTags: contact.tradeTags || []
   }));
-
   state.config.routingRules = state.config.routingRules.map((rule, index) => ({
     ...rule,
     id: rule.id || `rule_${slugify(rule.name || `rule_${index + 1}`)}`,
-    name: rule.name || `Rule ${index + 1}`,
-    active: rule.active !== false,
-    sortOrder: Number(rule.sortOrder || index + 1),
-    conditions: {
-      ...(rule.conditions || {}),
-      issueTypes: rule.conditions.issueTypes || [],
-      urgencies: rule.conditions.urgencies || [],
-      areas: rule.conditions.areas || [],
-      scheduleMode: rule.conditions.scheduleMode || "any",
-      contactTypes: rule.conditions.contactTypes || []
-    },
-    strategy: {
-      ...(rule.strategy || {}),
-      initialTier: Number(rule.strategy.initialTier || 1),
-      batchSize: Number(rule.strategy.batchSize || 3),
-      escalateAfterMinutes: Number(rule.strategy.escalateAfterMinutes || 5),
-      subReplacementWindowMinutes: Number(rule.strategy.subReplacementWindowMinutes || 10),
-      leaveVoicemail: Boolean(rule.strategy.leaveVoicemail),
-      sendSms: rule.strategy.sendSms !== false,
-      notifySlackOnEscalation: Boolean(rule.strategy.notifySlackOnEscalation),
-      escalationSequence: Array.isArray(rule.strategy.escalationSequence) ? rule.strategy.escalationSequence : []
-    },
+    name: rule.name || `Rule ${index + 1}`, active: rule.active !== false, sortOrder: Number(rule.sortOrder || index + 1),
+    conditions: { ...(rule.conditions || {}), issueTypes: rule.conditions.issueTypes || [], urgencies: rule.conditions.urgencies || [],
+      areas: rule.conditions.areas || [], scheduleMode: rule.conditions.scheduleMode || "any", contactTypes: rule.conditions.contactTypes || [] },
+    strategy: { ...(rule.strategy || {}), initialTier: Number(rule.strategy.initialTier || 1), batchSize: Number(rule.strategy.batchSize || 3),
+      escalateAfterMinutes: Number(rule.strategy.escalateAfterMinutes || 5), subReplacementWindowMinutes: Number(rule.strategy.subReplacementWindowMinutes || 10),
+      leaveVoicemail: Boolean(rule.strategy.leaveVoicemail), sendSms: rule.strategy.sendSms !== false, notifySlackOnEscalation: Boolean(rule.strategy.notifySlackOnEscalation),
+      escalationSequence: Array.isArray(rule.strategy.escalationSequence) ? rule.strategy.escalationSequence : [] },
     targetContactIds: rule.targetContactIds || []
   }));
-
   state.config.intakeFields = state.config.intakeFields.map((field, index) => ({
-    ...field,
-    id: field.id || `field_${index + 1}`,
-    label: field.label || `Field ${index + 1}`,
-    type: field.type || "text",
-    required: Boolean(field.required),
-    helpText: field.helpText || ""
+    ...field, id: field.id || `field_${index + 1}`, label: field.label || `Field ${index + 1}`,
+    type: field.type || "text", required: Boolean(field.required), helpText: field.helpText || ""
   }));
-
   state.config.workspace.businessHours.days = normalizeCsv(state.config.workspace.businessHours.days);
-
-  state.config = await fetchJson("/api/config", {
-    method: "PUT",
-    body: JSON.stringify(state.config)
-  });
-
+  state.config = await fetchJson("/api/config", { method: "PUT", body: JSON.stringify(state.config) });
   render();
-  setSaveStatus("Dashboard saved.", "ok");
+  setSaveStatus("Saved.", "ok");
 }
 
 async function createTestJob() {
@@ -522,106 +381,23 @@ async function createTestJob() {
     summary: document.querySelector("#job-summary").value,
     notes: document.querySelector("#job-notes").value
   };
-
-  const result = await fetchJson("/api/jobs", {
-    method: "POST",
-    body: JSON.stringify(payload)
-  });
-
+  const result = await fetchJson("/api/jobs", { method: "POST", body: JSON.stringify(payload) });
   elements.jobResult.textContent = JSON.stringify(result, null, 2);
   state.jobs = await fetchJson("/api/jobs");
   renderJobs();
 }
 
-function wireActions() {
-  elements.saveButton.onclick = () => saveConfig().catch((error) => setSaveStatus(error.message, "error"));
-  elements.refreshButton.onclick = () => loadAll().catch((error) => setSaveStatus(error.message, "error"));
-
-  document.querySelectorAll(".tab-button").forEach((btn) => {
-    btn.onclick = () => switchTab(btn.dataset.tab);
-  });
-
-  document.querySelector("#add-field").onclick = () => {
-    state.config.intakeFields.push({
-      id: `field_${state.config.intakeFields.length + 1}`,
-      label: "",
-      type: "text",
-      required: false,
-      helpText: ""
-    });
-    renderIntakeFields();
-    setSaveStatus("Unsaved changes.", "dirty");
-  };
-  document.querySelector("#add-contact").onclick = () => {
-    state.config.contacts.push({
-      id: "",
-      name: "",
-      company: "",
-      type: "tech",
-      priorityTier: 1,
-      phone: "",
-      smsPhone: "",
-      serviceAreas: [],
-      availability: "",
-      notes: "",
-      active: true,
-      doNotUse: false,
-      mayReplaceSubcontractor: true
-    });
-    render();
-    setSaveStatus("Unsaved changes.", "dirty");
-  };
-  document.querySelector("#add-rule").onclick = () => {
-    state.config.routingRules.push({
-      id: "",
-      name: "",
-      active: true,
-      sortOrder: state.config.routingRules.length + 1,
-      conditions: {
-        issueTypes: [],
-        urgencies: [],
-        areas: [],
-        scheduleMode: "any",
-        contactTypes: []
-      },
-      strategy: {
-        initialTier: 1,
-        batchSize: 3,
-        escalateAfterMinutes: 5,
-        subReplacementWindowMinutes: 10,
-        leaveVoicemail: false,
-        sendSms: true,
-        notifySlackOnEscalation: true,
-        escalationSequence: []
-      },
-      targetContactIds: []
-    });
-    render();
-    setSaveStatus("Unsaved changes.", "dirty");
-  };
-  document.querySelector("#create-job").onclick = () => {
-    createTestJob().catch((error) => {
-      elements.jobResult.textContent = error.message;
-    });
-  };
-}
-
-// --- Polling ---
+// ---- Polling ----
 
 let pollTimer = null;
 
 async function pollUpdate() {
-  // Only refresh jobs (not config) to avoid overwriting unsaved edits
   try {
     state.jobs = await fetchJson("/api/jobs");
-    if (state.activeTab === "jobs") {
+    if (state.activePage === "jobs") {
       if (state.selectedJobId) {
-        // Refresh the detail panel if open
         const updated = state.jobs.find((j) => j.id === state.selectedJobId);
-        if (updated) {
-          state.selectedJob = updated;
-          renderJobDetail();
-        }
+        if (updated) { state.selectedJob = updated; renderJobDetail(); }
       } else {
         renderJobs();
       }
@@ -630,30 +406,24 @@ async function pollUpdate() {
   } catch {}
 }
 
-function startPolling(ms = 5000) {
-  stopPolling();
-  pollTimer = setInterval(pollUpdate, ms);
-}
+function startPolling(ms = 5000) { stopPolling(); pollTimer = setInterval(pollUpdate, ms); }
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
-function stopPolling() {
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-}
-
-// --- Event feed ---
+// ---- Event feed ----
 
 const EVENT_LABELS = {
   "job-created": (e) => `Job created (${e.issueType || "service"})`,
   "state-change": (e) => `State \u2192 ${e.to}`,
   "attempt-logged": (e) => `${e.channel || "?"} to ${e.contactId} (${e.status})`,
-  "customer-callback": (e) => `Customer callback: ${e.type} (${e.outcome || "?"})`,
+  "customer-callback": (e) => `Callback: ${e.type} (${e.outcome || "?"})`,
   "call-ended": (e) => `Call ended: ${e.callStatus || "?"}`,
   "job-accepted": (e) => `Accepted by ${e.contactName || e.contactId}`,
   "job-declined": (e) => `Declined by ${e.contactId}`,
-  "human-review-flagged": (e) => `REVIEW NEEDED: ${e.trigger}`,
-  "human-review-resolved": (e) => `Review resolved: ${e.trigger}`,
+  "human-review-flagged": (e) => `REVIEW: ${e.trigger}`,
+  "human-review-resolved": (e) => `Resolved: ${e.trigger}`,
   "sub-cancelled": () => "Sub cancelled",
-  "en-route-confirmed": () => "Sub marked en route",
-  "workflow-resumed": (e) => `Workflow resumed \u2192 ${e.resumedTo}`,
+  "en-route-confirmed": () => "Sub en route",
+  "workflow-resumed": (e) => `Resumed \u2192 ${e.resumedTo}`,
   "slack-summary": () => "Slack posted",
   "manual-close": () => "Manually closed"
 };
@@ -670,7 +440,6 @@ async function loadEvents() {
   const since = state.lastEventTime || new Date(Date.now() - 3600000).toISOString();
   const events = await fetchJson(`/api/events?since=${encodeURIComponent(since)}&limit=30`);
   if (events.length) {
-    // Merge new events, deduplicate by id, keep most recent 50
     const existingIds = new Set(state.events.map((e) => e.id));
     const newEvents = events.filter((e) => !existingIds.has(e.id));
     state.events = [...newEvents, ...state.events].slice(0, 50);
@@ -683,12 +452,14 @@ function renderEventFeed() {
   const feed = document.querySelector("#event-feed");
   const countBadge = document.querySelector("#event-count");
   if (!feed) return;
-
   const rows = state.events.slice(0, 25).map((evt) => {
     const row = document.createElement("div");
     row.className = "event-row";
     row.dataset.severity = EVENT_SEVERITY[evt.type] || "info";
     row.onclick = () => openJobDetail(evt.jobId);
+
+    const dot = document.createElement("span");
+    dot.className = "evt-dot";
 
     const time = document.createElement("span");
     time.className = "evt-time";
@@ -703,26 +474,22 @@ function renderEventFeed() {
     const labelFn = EVENT_LABELS[evt.type];
     text.textContent = labelFn ? labelFn(evt) : evt.type;
 
-    row.append(time, jobId, text);
+    row.append(dot, time, jobId, text);
     return row;
   });
-
   feed.replaceChildren(...rows);
-  if (countBadge) countBadge.textContent = state.events.length > 0 ? String(state.events.length) : "";
+  if (countBadge) countBadge.textContent = state.events.length > 0 ? `(${state.events.length})` : "";
 }
 
-// --- Job detail panel ---
+// ---- Job detail ----
 
 async function openJobDetail(jobId) {
   state.selectedJobId = jobId;
-  try {
-    state.selectedJob = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}`);
-  } catch {
-    state.selectedJob = state.jobs.find((j) => j.id === jobId) || null;
-  }
+  if (state.activePage !== "jobs") switchPage("jobs");
+  try { state.selectedJob = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}`); }
+  catch { state.selectedJob = state.jobs.find((j) => j.id === jobId) || null; }
   document.querySelector("#jobs-list-view").style.display = "none";
-  const panel = document.querySelector("#job-detail");
-  panel.style.display = "block";
+  document.querySelector("#job-detail").style.display = "block";
   renderJobDetail();
 }
 
@@ -740,28 +507,26 @@ function renderJobDetail() {
   const status = jobStatusLabel(job);
   const contactMap = new Map((state.config?.contacts || []).map((c) => [c.id, c]));
 
-  let html = `<div class="panel">`;
+  let html = "";
 
   // Header
   const flags = job.commFlags || {};
-  const flagPills = [
-    flags.customerCallbackDue && '<span class="comm-flag flag-callback">Callback due</span>',
-    flags.techContactInProgress && '<span class="comm-flag flag-tech">Tech outreach</span>',
-    flags.subcontractorCallbackPending && '<span class="comm-flag flag-sub">Sub pending</span>',
-    flags.finalNotificationPending && '<span class="comm-flag flag-final">Final notify</span>'
+  const pills = [
+    flags.customerCallbackDue && '<span class="flag-pill flag-callback">Callback due</span>',
+    flags.techContactInProgress && '<span class="flag-pill flag-tech">Tech outreach</span>',
+    flags.subcontractorCallbackPending && '<span class="flag-pill flag-sub">Sub pending</span>',
+    flags.finalNotificationPending && '<span class="flag-pill flag-final">Final notify</span>'
   ].filter(Boolean).join(" ");
-  const dupWarning = job.possibleDuplicateOf ? ` <span class="comm-flag flag-dup">Possible dup of ${escapeHtml(job.possibleDuplicateOf)}</span>` : "";
+  const dupWarn = job.possibleDuplicateOf ? ` <span class="flag-pill flag-dup">Possible dup of ${escapeHtml(job.possibleDuplicateOf)}</span>` : "";
 
   html += `<div class="detail-header">
-    <div>
-      <span class="state-badge" data-status="${status}">${job.finalStatus || job.state || "open"}</span>${dupWarning}
-      ${flagPills ? `<div style="margin-top:6px">${flagPills}</div>` : ""}
-      <h2>${job.issueType || "Service request"} &middot; ${job.locationArea || "Unknown"}</h2>
-      <p class="job-meta">${job.id} &middot; ${new Date(job.createdAt).toLocaleString()} &middot; Rule: ${job.matchedRuleId || "none"}</p>
-    </div>
+    <span class="badge badge-${status}">${job.finalStatus || job.state || "OPEN"}</span>${dupWarn}
+    ${pills ? `<div style="margin-top:6px">${pills}</div>` : ""}
+    <h1>${escapeHtml(job.issueType || "Service request")} &middot; ${escapeHtml(job.locationArea || "Unknown")}</h1>
+    <p class="meta">${job.id} &middot; ${new Date(job.createdAt).toLocaleString()} &middot; Rule: ${job.matchedRuleId || "none"}</p>
   </div>`;
 
-  // Caller info grid
+  // Info grid
   html += `<div class="detail-grid">`;
   const fields = [
     ["Caller", job.callerName], ["Callback", job.callbackNumber], ["Alternate", job.alternateNumber],
@@ -775,37 +540,28 @@ function renderJobDetail() {
   }
   html += `</div>`;
 
-  // Summary
-  if (job.summary) html += `<p>${escapeHtml(job.summary)}</p>`;
+  if (job.summary) html += `<p style="margin-bottom:16px;color:var(--text-secondary)">${escapeHtml(job.summary)}</p>`;
 
-  // Dispatch status
   if (job.acceptedBy) {
-    html += `<div class="detail-grid" style="margin-top:12px">
+    html += `<div class="detail-grid">
       <div class="detail-field"><div class="field-label">Accepted by</div><div class="field-value">${escapeHtml(job.acceptedBy.contactName || job.acceptedBy.contactId)}</div></div>
       <div class="detail-field"><div class="field-label">Channel</div><div class="field-value">${job.acceptedBy.channel}</div></div>
       <div class="detail-field"><div class="field-label">ETA</div><div class="field-value">${job.acceptedBy.etaMinutes ? job.acceptedBy.etaMinutes + " min" : "-"}</div></div>
     </div>`;
   }
   if (job.escalationDueAt && status === "open") {
-    const remaining = Math.max(0, Math.round((new Date(job.escalationDueAt).getTime() - Date.now()) / 1000));
-    html += `<p class="job-meta" style="margin-top:8px">Escalation step ${job.escalationStep || 0} &middot; ${remaining > 0 ? remaining + "s remaining" : "due now"}</p>`;
+    const rem = Math.max(0, Math.round((new Date(job.escalationDueAt).getTime() - Date.now()) / 1000));
+    html += `<p class="meta">Escalation step ${job.escalationStep || 0} &middot; ${rem > 0 ? rem + "s remaining" : "due now"}</p>`;
   }
 
-  // Attempts table
+  // Attempts
   const attempts = job.attempts || [];
   if (attempts.length) {
-    html += `<div class="detail-section"><h3>Dispatch Attempts (${attempts.length})</h3>`;
-    html += `<table class="attempts-table"><thead><tr><th>Time</th><th>Contact</th><th>Channel</th><th>Status</th><th>Notes</th></tr></thead><tbody>`;
+    html += `<div class="detail-section"><h2>Dispatch Attempts (${attempts.length})</h2>`;
+    html += `<table class="data-table"><thead><tr><th>Time</th><th>Contact</th><th>Channel</th><th>Status</th><th>Notes</th></tr></thead><tbody>`;
     for (const a of attempts) {
-      const contact = contactMap.get(a.contactId);
-      const name = contact ? contact.name : a.contactId;
-      html += `<tr>
-        <td>${new Date(a.at).toLocaleTimeString()}</td>
-        <td>${escapeHtml(name)}</td>
-        <td>${a.channel}</td>
-        <td class="status-${a.status}">${a.status}</td>
-        <td>${escapeHtml(a.notes || "")}</td>
-      </tr>`;
+      const c = contactMap.get(a.contactId);
+      html += `<tr><td>${new Date(a.at).toLocaleTimeString()}</td><td>${escapeHtml(c?.name || a.contactId)}</td><td>${a.channel}</td><td class="status-${a.status}">${a.status}</td><td>${escapeHtml(a.notes || "")}</td></tr>`;
     }
     html += `</tbody></table></div>`;
   }
@@ -813,15 +569,10 @@ function renderJobDetail() {
   // Customer callbacks
   const callbacks = job.customerCallbacks || [];
   if (callbacks.length) {
-    html += `<div class="detail-section"><h3>Customer Callbacks (${callbacks.length})</h3>`;
-    html += `<table class="attempts-table"><thead><tr><th>Time</th><th>Type</th><th>Outcome</th><th>Error</th></tr></thead><tbody>`;
+    html += `<div class="detail-section"><h2>Customer Callbacks (${callbacks.length})</h2>`;
+    html += `<table class="data-table"><thead><tr><th>Time</th><th>Type</th><th>Outcome</th><th>Error</th></tr></thead><tbody>`;
     for (const cb of callbacks) {
-      html += `<tr>
-        <td>${new Date(cb.at).toLocaleTimeString()}</td>
-        <td>${cb.type}</td>
-        <td class="status-${cb.outcome === "completed" ? "accepted" : "failed"}">${cb.outcome}</td>
-        <td>${escapeHtml(cb.error || "")}</td>
-      </tr>`;
+      html += `<tr><td>${new Date(cb.at).toLocaleTimeString()}</td><td>${cb.type}</td><td class="status-${cb.outcome === "completed" ? "accepted" : "failed"}">${cb.outcome}</td><td>${escapeHtml(cb.error || "")}</td></tr>`;
     }
     html += `</tbody></table></div>`;
   }
@@ -829,14 +580,13 @@ function renderJobDetail() {
   // Recordings
   const recordings = job.recordings || [];
   if (recordings.length) {
-    html += `<div class="detail-section"><h3>Recordings (${recordings.length})</h3>`;
+    html += `<div class="detail-section"><h2>Recordings (${recordings.length})</h2>`;
     for (const rec of recordings) {
-      const recContact = contactMap.get(rec.contactId);
-      const recName = recContact ? recContact.name : (rec.contactId || "customer");
-      html += `<div style="margin-bottom:10px; font-size:0.85rem">
-        <span class="field-label">${new Date(rec.at).toLocaleTimeString()} &middot; ${escapeHtml(recName)}</span>
-        ${rec.recordingUrl ? ` &middot; <a href="${escapeHtml(rec.recordingUrl)}" target="_blank" rel="noopener" style="color:var(--accent)">Play recording</a>` : ""}
-        ${rec.transcript ? `<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--muted);font-size:0.78rem">Transcript</summary><pre class="code-block" style="margin-top:4px;font-size:0.75rem;max-height:200px;overflow-y:auto">${escapeHtml(rec.transcript)}</pre></details>` : ""}
+      const rc = contactMap.get(rec.contactId);
+      html += `<div style="margin-bottom:8px;font-size:12.5px">
+        <span class="meta">${new Date(rec.at).toLocaleTimeString()} &middot; ${escapeHtml(rc?.name || rec.contactId || "customer")}</span>
+        ${rec.recordingUrl ? ` <a href="${escapeHtml(rec.recordingUrl)}" target="_blank" rel="noopener" style="color:var(--blue)">Play</a>` : ""}
+        ${rec.transcript ? `<details style="margin-top:4px"><summary style="cursor:pointer;color:var(--text-tertiary);font-size:11px">Transcript</summary><pre class="code-block" style="margin-top:4px;max-height:160px;overflow-y:auto">${escapeHtml(rec.transcript)}</pre></details>` : ""}
       </div>`;
     }
     html += `</div>`;
@@ -845,31 +595,28 @@ function renderJobDetail() {
   // Timeline
   const timeline = (job.timeline || []).slice().reverse();
   if (timeline.length) {
-    html += `<div class="detail-section"><h3>Timeline (${timeline.length} events)</h3><div class="timeline-list">`;
+    html += `<div class="detail-section"><h2>Timeline (${timeline.length})</h2><div class="timeline">`;
     for (const evt of timeline) {
-      const severity = EVENT_SEVERITY[evt.type] || "info";
+      const sev = EVENT_SEVERITY[evt.type] || "info";
       const labelFn = EVENT_LABELS[evt.type];
-      const label = labelFn ? labelFn(evt) : evt.type;
-      html += `<div class="timeline-item" data-severity="${severity}">
+      html += `<div class="tl-item" data-severity="${sev}">
         <span class="tl-time">${new Date(evt.at).toLocaleTimeString()}</span>
-        <span class="tl-type">${escapeHtml(label)}</span>
-        <span class="tl-detail">${evt.actor || ""}</span>
+        <span class="tl-label">${escapeHtml(labelFn ? labelFn(evt) : evt.type)}</span>
+        ${evt.actor ? `<span class="tl-actor">${escapeHtml(evt.actor)}</span>` : ""}
       </div>`;
     }
     html += `</div></div>`;
   }
 
   html += `<div class="detail-actions" id="detail-actions"></div>`;
-  html += `</div>`;
   container.innerHTML = html;
 
-  // Wire action buttons safely (no inline onclick)
+  // Action buttons
   const actionsDiv = container.querySelector("#detail-actions");
   if (job.state === "HUMAN_REVIEW_REQUIRED") {
-    const unresolvedFlags = (job.humanReviewFlags || []).filter((f) => !f.resolved);
-    for (const flag of unresolvedFlags) {
+    for (const flag of (job.humanReviewFlags || []).filter((f) => !f.resolved)) {
       const btn = document.createElement("button");
-      btn.className = "button button-warning";
+      btn.className = "btn btn-warning btn-sm";
       btn.textContent = `Resolve: ${flag.trigger}`;
       btn.addEventListener("click", () => resolveReview(job.id, flag.trigger));
       actionsDiv.append(btn);
@@ -877,21 +624,21 @@ function renderJobDetail() {
   }
   if (job.state === "PROVISIONAL_SUB_ASSIGNMENT" && !job.enRouteConfirmedAt) {
     const btn = document.createElement("button");
-    btn.className = "button button-success";
+    btn.className = "btn btn-success btn-sm";
     btn.textContent = "Mark Sub En Route";
     btn.addEventListener("click", () => markEnRoute(job.id));
     actionsDiv.append(btn);
   }
   if (job.possibleDuplicateOf) {
     const btn = document.createElement("button");
-    btn.className = "button button-danger";
-    btn.textContent = `Cancel as Duplicate of ${job.possibleDuplicateOf}`;
+    btn.className = "btn btn-danger btn-sm";
+    btn.textContent = `Cancel as Duplicate`;
     btn.addEventListener("click", () => cancelAsDuplicate(job.id));
     actionsDiv.append(btn);
   }
   if (["DISPATCH_CONFIRMED_INTERNAL", "DISPATCH_CONFIRMED_SUBCONTRACTOR", "UNABLE_TO_DISPATCH", "HUMAN_REVIEW_REQUIRED"].includes(job.state)) {
     const btn = document.createElement("button");
-    btn.className = "button button-secondary";
+    btn.className = "btn btn-secondary btn-sm";
     btn.textContent = "Close Job";
     btn.addEventListener("click", () => closeJob(job.id));
     actionsDiv.append(btn);
@@ -899,51 +646,52 @@ function renderJobDetail() {
   if (!actionsDiv.children.length) actionsDiv.remove();
 }
 
-function escapeHtml(str) {
-  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-// --- Action handlers ---
+// ---- Actions ----
 
 async function resolveReview(jobId, trigger) {
-  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/resolve-review`, {
-    method: "POST",
-    body: JSON.stringify({ trigger, resolvedBy: "dispatcher" })
-  });
+  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/resolve-review`, { method: "POST", body: JSON.stringify({ trigger, resolvedBy: "dispatcher" }) });
   openJobDetail(jobId);
 }
 
 async function markEnRoute(jobId) {
-  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/en-route`, {
-    method: "POST",
-    body: JSON.stringify({})
-  });
+  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/en-route`, { method: "POST", body: JSON.stringify({}) });
   openJobDetail(jobId);
 }
 
 async function cancelAsDuplicate(jobId) {
-  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/close`, {
-    method: "POST",
-    body: JSON.stringify({ closedBy: "dispatcher", finalStatus: "CANCELLED_DUPLICATE", reason: "Duplicate job" })
-  });
+  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/close`, { method: "POST", body: JSON.stringify({ closedBy: "dispatcher", finalStatus: "CANCELLED_DUPLICATE", reason: "Duplicate job" }) });
   openJobDetail(jobId);
 }
 
 async function closeJob(jobId) {
-  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/close`, {
-    method: "POST",
-    body: JSON.stringify({ closedBy: "dispatcher" })
-  });
+  await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}/close`, { method: "POST", body: JSON.stringify({ closedBy: "dispatcher" }) });
   openJobDetail(jobId);
 }
 
+// ---- Wire everything ----
+
+function wireActions() {
+  elements.saveButton.onclick = () => saveConfig().catch((err) => setSaveStatus(err.message, "error"));
+  document.querySelectorAll(".nav-item").forEach((btn) => { btn.onclick = () => switchPage(btn.dataset.page); });
+  document.querySelectorAll(".flow-link").forEach((btn) => { btn.onclick = () => switchPage(btn.dataset.goto); });
+  document.querySelector("#add-field").onclick = () => {
+    state.config.intakeFields.push({ id: `field_${state.config.intakeFields.length + 1}`, label: "", type: "text", required: false, helpText: "" });
+    renderIntakeFields(); setSaveStatus("Unsaved changes.", "dirty");
+  };
+  document.querySelector("#add-contact").onclick = () => {
+    state.config.contacts.push({ id: "", name: "", company: "", type: "tech", priorityTier: 1, phone: "", smsPhone: "", serviceAreas: [], availability: "", notes: "", active: true, doNotUse: false, mayReplaceSubcontractor: true });
+    render(); setSaveStatus("Unsaved changes.", "dirty");
+  };
+  document.querySelector("#add-rule").onclick = () => {
+    state.config.routingRules.push({ id: "", name: "", active: true, sortOrder: state.config.routingRules.length + 1, conditions: { issueTypes: [], urgencies: [], areas: [], scheduleMode: "any", contactTypes: [] }, strategy: { initialTier: 1, batchSize: 3, escalateAfterMinutes: 5, subReplacementWindowMinutes: 10, leaveVoicemail: false, sendSms: true, notifySlackOnEscalation: true, escalationSequence: [] }, targetContactIds: [] });
+    render(); setSaveStatus("Unsaved changes.", "dirty");
+  };
+  document.querySelector("#create-job").onclick = () => { createTestJob().catch((err) => { elements.jobResult.textContent = err.message; }); };
+  document.querySelector("#job-detail-back").onclick = closeJobDetail;
+}
+
+// ---- Init ----
+
 loadAll()
-  .then(() => {
-    wireActions();
-    document.querySelector("#job-detail-back").onclick = closeJobDetail;
-    startPolling();
-    loadEvents().catch(() => {});
-  })
-  .catch((error) => {
-    setSaveStatus(error.message, "error");
-  });
+  .then(() => { wireActions(); startPolling(); loadEvents().catch(() => {}); })
+  .catch((err) => setSaveStatus(err.message, "error"));

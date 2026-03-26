@@ -3,338 +3,380 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Phone Viking Dispatch</title>
+    <title>Phone Viking</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="page-shell">
-      <header class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Dispatch Control</p>
-          <h1>Phone Viking Routing Dashboard</h1>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="sidebar-brand">Phone Viking</div>
+        <nav class="sidebar-nav">
+          <button class="nav-item active" data-page="jobs">Jobs <span class="live-dot"></span></button>
+          <button class="nav-item" data-page="contacts">Contacts</button>
+          <button class="nav-item" data-page="messages">Messages</button>
+          <div class="nav-divider"></div>
+          <div class="nav-group-label">Settings</div>
+          <button class="nav-item nav-sub-item" data-page="flow">How It Works</button>
+          <button class="nav-item nav-sub-item" data-page="workspace">Workspace</button>
+          <button class="nav-item nav-sub-item" data-page="intake">Intake Questions</button>
+          <button class="nav-item nav-sub-item" data-page="templates">Message Templates</button>
+          <button class="nav-item nav-sub-item" data-page="rules">Routing Rules</button>
+          <button class="nav-item nav-sub-item" data-page="integrations">Integrations</button>
+        </nav>
+        <div class="sidebar-footer">
+          <button id="save-config" class="btn btn-primary">Save Changes</button>
+          <p id="save-status" class="save-status"></p>
         </div>
-        <div class="hero-actions">
-          <button id="save-config" class="button button-primary">Save Dashboard</button>
-          <button id="refresh-all" class="button button-secondary">Refresh</button>
-          <p id="save-status" class="save-status">No local changes yet.</p>
-        </div>
-      </header>
+      </aside>
 
-      <nav class="tab-bar">
-        <button class="tab-button active" data-tab="jobs">Jobs</button>
-        <button class="tab-button" data-tab="contacts">Contacts</button>
-        <button class="tab-button" data-tab="routing">Routing</button>
-        <button class="tab-button" data-tab="setup">Setup</button>
-      </nav>
+      <main class="content">
+        <div class="content-inner">
 
-      <main>
-        <div class="tab-panel active" data-tab="jobs">
-          <div class="tab-intro">
-            <h2>Operations</h2>
-            <p>Live dispatch view. Jobs auto-refresh every 5 seconds. Click any job to see the full case file with timeline, dispatch attempts, and action buttons.</p>
-            <div class="live-badge" id="live-badge"><span class="live-dot"></span> Live</div>
-          </div>
-
-          <!-- Job detail panel (hidden by default) -->
-          <div id="job-detail" class="job-detail-panel" style="display:none">
-            <button id="job-detail-back" class="button button-secondary job-detail-back-btn">Back to list</button>
-            <div id="job-detail-content"></div>
-          </div>
-
-          <!-- Jobs list view -->
-          <div id="jobs-list-view" class="tab-stack">
-            <details class="panel event-feed-panel" open>
-              <summary class="panel-header clickable">
-                <div>
-                  <p class="eyebrow">Activity</p>
-                  <h2>Event Feed <span id="event-count" class="event-count-badge"></span></h2>
-                </div>
-              </summary>
-              <div id="event-feed" class="event-feed"></div>
-            </details>
-
-            <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Dispatch</p>
+          <!-- JOBS -->
+          <section class="page active" data-page="jobs">
+            <div id="job-detail" style="display:none">
+              <button id="job-detail-back" class="detail-back">&larr; Back to jobs</button>
+              <div id="job-detail-content"></div>
+            </div>
+            <div id="jobs-list-view">
+              <div class="page-header">
+                <h1>Jobs</h1>
+                <p>Live dispatch view. Updates every 5 seconds. Click any job to see the full case file.</p>
+              </div>
+              <div class="section">
+                <details class="collapsible" open>
+                  <summary><span style="font-weight:600">Event Feed</span> <span id="event-count" style="font-size:11px;color:var(--text-tertiary)"></span></summary>
+                  <div class="collapsible-body">
+                    <div id="event-feed" class="event-feed"></div>
+                  </div>
+                </details>
+              </div>
+              <div class="section">
+                <div class="section-header">
                   <h2>Active Jobs</h2>
                 </div>
+                <div id="jobs" class="stack"></div>
               </div>
-              <div id="jobs" class="stack"></div>
-            </section>
+              <div class="section">
+                <details class="collapsible">
+                  <summary><span style="font-weight:600">Simulate a Job</span></summary>
+                  <div class="collapsible-body">
+                    <p class="section-desc">Test your setup without making real calls. Fill in the fields and run.</p>
+                    <div class="form-grid">
+                      <div class="form-group">
+                        <label class="form-label">Caller name</label>
+                        <input id="job-callerName" type="text" placeholder="Jane Smith" />
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Callback number</label>
+                        <input id="job-callbackNumber" type="text" placeholder="+1..." />
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Service address</label>
+                        <input id="job-serviceAddress" type="text" placeholder="123 Main St" />
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Location / area</label>
+                        <input id="job-locationArea" type="text" placeholder="Fort McMurray" />
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Issue type</label>
+                        <input id="job-issueType" type="text" placeholder="hvac" />
+                      </div>
+                      <div class="form-group">
+                        <label class="form-label">Urgency</label>
+                        <input id="job-urgency" type="text" placeholder="emergency" />
+                      </div>
+                      <div class="form-group wide">
+                        <label class="form-label">Summary</label>
+                        <textarea id="job-summary" rows="3" placeholder="Furnace not working, -30 outside"></textarea>
+                      </div>
+                      <div class="form-group wide">
+                        <label class="form-label">Notes</label>
+                        <textarea id="job-notes" rows="2"></textarea>
+                      </div>
+                    </div>
+                    <div style="margin-top:12px"><button id="create-job" class="btn btn-secondary">Run test</button></div>
+                    <pre id="job-result" class="code-block" style="margin-top:12px">Run a test to preview matched rule and contacts.</pre>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </section>
 
-            <details class="panel simulator-details">
-              <summary class="panel-header clickable">
-                <div>
-                  <p class="eyebrow">Testing</p>
-                  <h2>Simulate a Job</h2>
-                </div>
-              </summary>
-              <div class="simulator-body">
-                <p class="section-desc">Fake a call to test your setup. Fill in the fields below like a real caller would, hit "Run test," and the system will match a routing rule and show you which contacts would get dispatched. No real calls or texts go out.</p>
-                <div class="form-grid">
-                  <label>
-                    <span>Caller name</span>
-                    <input id="job-callerName" type="text" placeholder="Jane Smith" />
-                  </label>
-                  <label>
-                    <span>Callback number</span>
-                    <input id="job-callbackNumber" type="text" placeholder="+1..." />
-                  </label>
-                  <label>
-                    <span>Service address</span>
-                    <input id="job-serviceAddress" type="text" placeholder="123 Main St" />
-                  </label>
-                  <label>
-                    <span>Location / area</span>
-                    <input id="job-locationArea" type="text" placeholder="NW Calgary" />
-                  </label>
-                  <label>
-                    <span>Issue type</span>
-                    <input id="job-issueType" type="text" placeholder="locksmith" />
-                  </label>
-                  <label>
-                    <span>Urgency</span>
-                    <input id="job-urgency" type="text" placeholder="emergency" />
-                  </label>
-                  <label class="wide">
-                    <span>Summary</span>
-                    <textarea id="job-summary" rows="4" placeholder="Front door lock jammed, customer locked out with child inside."></textarea>
-                  </label>
-                  <label class="wide">
-                    <span>Notes</span>
-                    <textarea id="job-notes" rows="4"></textarea>
-                  </label>
-                </div>
-                <div class="simulator-actions">
-                  <button id="create-job" class="button button-primary">Run test</button>
-                </div>
-                <pre id="job-result" class="code-block">Run a test job to preview the matched rule and contact batch.</pre>
+          <!-- CONTACTS -->
+          <section class="page" data-page="contacts">
+            <div class="page-header">
+              <h1>Contacts</h1>
+              <p>Techs and partners the system can dispatch to. Each needs a name, phone, and service area to be dispatchable.</p>
+            </div>
+            <div class="section">
+              <div class="section-header">
+                <h2>All Contacts</h2>
+                <button id="add-contact" class="btn btn-secondary btn-sm">Add contact</button>
               </div>
-            </details>
-          </div>
-        </div>
+              <div id="contacts" class="stack"></div>
+            </div>
+          </section>
 
-        <div class="tab-panel" data-tab="contacts">
-          <div class="tab-intro">
-            <h2>Contacts</h2>
-            <p>These are the people the system can dispatch to when a job comes in. There are two types: <strong>techs</strong> (the people who actually show up and do the work) and <strong>partners</strong> (companies you subcontract to). When a routing rule fires, it picks from this list based on area, availability, and priority tier.</p>
-          </div>
-          <div class="tab-stack">
-            <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Roster</p>
-                  <h2>All Contacts</h2>
-                </div>
-                <button id="add-contact" class="button button-secondary">Add contact</button>
-              </div>
-              <p class="section-desc">Each contact needs at minimum a <strong>name</strong>, <strong>phone number</strong>, and at least one <strong>service area</strong> to be dispatchable. The priority tier controls who gets called first (tier 1 = first choice). Mark contacts inactive to temporarily remove them from dispatch without deleting them.</p>
-              <div id="contacts" class="card-grid"></div>
-            </section>
-          </div>
-        </div>
+          <!-- MESSAGES -->
+          <section class="page" data-page="messages">
+            <div class="page-header">
+              <h1>Messages</h1>
+              <p>All SMS and calls sent to techs and customers, pulled from job dispatch history.</p>
+            </div>
+            <div class="section">
+              <table class="data-table">
+                <thead>
+                  <tr><th>Time</th><th>Direction</th><th>Recipient</th><th>Channel</th><th>Status</th><th>Job</th></tr>
+                </thead>
+                <tbody id="messages-body"></tbody>
+              </table>
+              <p id="messages-empty" class="hint" style="display:none;padding:20px 0">No messages yet.</p>
+            </div>
+          </section>
 
-        <div class="tab-panel" data-tab="routing">
-          <div class="tab-intro">
-            <h2>Routing</h2>
-            <p>This is the brain of the dispatch system. It controls three things: what the AI agent asks the caller, what messages get sent out, and the rules that decide who gets called. Here's the flow: <strong>caller phones in → agent collects info using the fields below → system matches a routing rule → dispatches to the right contacts via call/SMS → posts a summary to Slack.</strong></p>
-          </div>
-          <div class="tab-stack">
-            <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Step 1</p>
-                  <h2>What the Agent Asks</h2>
-                </div>
-                <button id="add-field" class="button button-secondary">Add field</button>
+          <!-- HOW IT WORKS -->
+          <section class="page" data-page="flow">
+            <div class="page-header">
+              <h1>How It Works</h1>
+              <p>The dispatch system in 6 steps. Click "Configure" on any step to jump to its settings.</p>
+            </div>
+            <div class="flow-steps">
+              <div class="flow-step">
+                <div class="flow-num">1</div>
+                <div class="flow-title">Customer Calls</div>
+                <div class="flow-desc">After-hours call comes in to your Vapi phone number</div>
+                <button class="flow-link" data-goto="integrations">Configure &rarr;</button>
               </div>
-              <p class="section-desc">These are the questions the AI phone agent asks the caller. Each field becomes a question in the conversation — things like "What's your name?", "What's the issue?", "What's the address?" The agent uses these answers to fill in the job and match a routing rule.</p>
-              <div id="intake-fields" class="stack"></div>
-            </section>
+              <div class="flow-step">
+                <div class="flow-num">2</div>
+                <div class="flow-title">AI Collects Info</div>
+                <div class="flow-desc">Voice agent asks the caller about their emergency</div>
+                <button class="flow-link" data-goto="intake">Configure &rarr;</button>
+              </div>
+              <div class="flow-step">
+                <div class="flow-num">3</div>
+                <div class="flow-title">Job Created</div>
+                <div class="flow-desc">System creates a case, posts to Slack, checks for duplicates</div>
+                <button class="flow-link" data-goto="templates">Configure &rarr;</button>
+              </div>
+              <div class="flow-step">
+                <div class="flow-num">4</div>
+                <div class="flow-title">Rule Matched</div>
+                <div class="flow-desc">Routing rules decide which contacts to call based on issue, area, time</div>
+                <button class="flow-link" data-goto="rules">Configure &rarr;</button>
+              </div>
+              <div class="flow-step">
+                <div class="flow-num">5</div>
+                <div class="flow-title">Tech Dispatched</div>
+                <div class="flow-desc">SMS + AI call sent to techs in escalation order until someone accepts</div>
+                <button class="flow-link" data-goto="contacts">Configure &rarr;</button>
+              </div>
+              <div class="flow-step">
+                <div class="flow-num">6</div>
+                <div class="flow-title">Customer Notified</div>
+                <div class="flow-desc">Customer gets a callback confirming their tech is on the way</div>
+                <button class="flow-link" data-goto="templates">Configure &rarr;</button>
+              </div>
+            </div>
+          </section>
 
-            <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Step 2</p>
-                  <h2>What Gets Sent Out</h2>
-                </div>
-              </div>
-              <p class="section-desc">After a job is created, the system sends messages to your team and contacts. These templates control the exact wording. You can use tokens like <code>{{callerName}}</code> or <code>{{issueType}}</code> and they'll be replaced with the real values from the job.</p>
-              <div class="stack">
-                <label>
-                  <span>Slack summary — posted to your Slack channel when a new job comes in</span>
-                  <textarea data-path="messageTemplates.slackSummary" rows="6"></textarea>
-                </label>
-                <label>
-                  <span>Tech SMS — text sent to techs when they're being dispatched</span>
-                  <textarea data-path="messageTemplates.techSms" rows="5"></textarea>
-                </label>
-                <label>
-                  <span>Partner SMS — text sent to partner companies when they're being dispatched</span>
-                  <textarea data-path="messageTemplates.partnerSms" rows="5"></textarea>
-                </label>
-                <label>
-                  <span>Acceptance confirmation — sent back to the caller when a tech accepts the job</span>
-                  <textarea data-path="messageTemplates.acceptanceAck" rows="4"></textarea>
-                </label>
-                <p class="hint">Available tokens: <code>{{jobId}}</code>, <code>{{callerName}}</code>, <code>{{callbackNumber}}</code>, <code>{{serviceAddress}}</code>, <code>{{locationArea}}</code>, <code>{{issueType}}</code>, <code>{{urgency}}</code>, <code>{{summary}}</code>, <code>{{businessName}}</code>, <code>{{contactName}}</code></p>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Step 3</p>
-                  <h2>Who Gets Called</h2>
-                </div>
-                <button id="add-rule" class="button button-secondary">Add rule</button>
-              </div>
-              <p class="section-desc">Routing rules are if/then logic. Each rule says: "If the issue type is X, and the area is Y, and it's during Z hours — then call these contacts, in this order, with this escalation strategy." Rules are checked top to bottom by sort order. The first one that matches wins.</p>
-              <div id="routing-rules" class="stack"></div>
-            </section>
-          </div>
-        </div>
-
-        <div class="tab-panel" data-tab="setup">
-          <div class="tab-intro">
-            <h2>Setup</h2>
-            <p>Connect the services that make Phone Viking work. The system needs three things: <strong>Twilio</strong> to make phone calls and send texts, <strong>Vapi</strong> to power the AI voice agents, and <strong>Slack</strong> to notify your team. Set these up once and you shouldn't need to touch them again.</p>
-          </div>
-          <div class="tab-stack">
-            <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Your Business</p>
-                  <h2>Workspace</h2>
-                </div>
-              </div>
-              <p class="section-desc">Basic info about your business. The timezone and business hours are used by routing rules — you can create rules that only fire during business hours or only after hours.</p>
+          <!-- WORKSPACE -->
+          <section class="page" data-page="workspace">
+            <div class="page-header">
+              <h1>Workspace</h1>
+              <p>Your business info. Timezone and hours are used by routing rules that differentiate business hours from after hours.</p>
+            </div>
+            <div class="card">
               <div class="form-grid">
-                <label>
-                  <span>Business name</span>
+                <div class="form-group">
+                  <label class="form-label">Business name</label>
                   <input data-path="workspace.businessName" type="text" />
-                </label>
-                <label>
-                  <span>Timezone — e.g. America/Edmonton</span>
-                  <input data-path="workspace.timezone" type="text" />
-                </label>
-                <label>
-                  <span>Business days — comma-separated</span>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Timezone</label>
+                  <input data-path="workspace.timezone" type="text" placeholder="America/Edmonton" />
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Business days</label>
                   <input data-path="workspace.businessHours.daysCsv" type="text" placeholder="mon,tue,wed,thu,fri" />
-                </label>
-                <label>
-                  <span>Start hour (24h) — e.g. 8 for 8 AM</span>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">Start hour (24h)</label>
                   <input data-path="workspace.businessHours.startHour" type="number" min="0" max="23" />
-                </label>
-                <label>
-                  <span>End hour (24h) — e.g. 17 for 5 PM</span>
+                </div>
+                <div class="form-group">
+                  <label class="form-label">End hour (24h)</label>
                   <input data-path="workspace.businessHours.endHour" type="number" min="0" max="23" />
-                </label>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Twilio</p>
-                  <h2>Phone Calls and Texts</h2>
                 </div>
               </div>
-              <p class="section-desc">Twilio is how the system makes outbound calls to techs and sends SMS messages. You need two phone numbers from your Twilio account — one for voice calls, one for texts (they can be the same number). Sensitive fields render blank after refresh; leaving them blank on save preserves the stored values.</p>
-              <div class="form-grid">
-                <label>
-                  <span>Voice number — the Twilio number that makes outbound calls to techs</span>
-                  <input data-path="twilio.voiceNumber" type="text" placeholder="+1..." />
-                </label>
-                <label>
-                  <span>SMS number — the Twilio number that sends dispatch texts</span>
-                  <input data-path="twilio.smsNumber" type="text" placeholder="+1..." />
-                </label>
-                <label>
-                  <span>Account SID</span>
-                  <input data-path="twilio.accountSid" type="text" placeholder="leave blank to preserve" />
-                </label>
-                <label>
-                  <span>Auth token</span>
-                  <input data-path="twilio.authToken" type="password" placeholder="leave blank to preserve" />
-                </label>
-              </div>
-            </section>
+            </div>
+          </section>
 
-            <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Vapi</p>
-                  <h2>Voice Agent</h2>
+          <!-- INTAKE QUESTIONS -->
+          <section class="page" data-page="intake">
+            <div class="page-header">
+              <h1>Intake Questions</h1>
+              <p>These are the questions the AI phone agent asks the caller. Each field becomes a question in the conversation.</p>
+            </div>
+            <div class="section">
+              <div class="section-header">
+                <h2>Fields</h2>
+                <button id="add-field" class="btn btn-secondary btn-sm">Add field</button>
+              </div>
+              <div id="intake-fields" class="stack"></div>
+            </div>
+          </section>
+
+          <!-- MESSAGE TEMPLATES -->
+          <section class="page" data-page="templates">
+            <div class="page-header">
+              <h1>Message Templates</h1>
+              <p>Control the exact wording of messages sent to techs, partners, and customers. Use tokens like <code>{{callerName}}</code> and they'll be replaced with real values.</p>
+            </div>
+            <div class="stack">
+              <div class="card">
+                <div class="form-group">
+                  <label class="form-label">Slack summary</label>
+                  <textarea data-path="messageTemplates.slackSummary" rows="5"></textarea>
+                  <p class="hint">Posted to your Slack channel when a new job comes in</p>
                 </div>
               </div>
-              <p class="section-desc">Vapi powers the AI voice agents. This dashboard stores the outbound dispatch assistant configuration used to call techs and callers back. Sensitive fields render blank after refresh; leaving them blank on save preserves the stored values.</p>
-              <div class="form-grid">
-                <label>
-                  <span>Dispatch assistant ID</span>
-                  <input data-path="vapi.dispatchAssistantId" type="text" />
-                </label>
-                <label>
-                  <span>Phone number ID</span>
-                  <input data-path="vapi.phoneNumberId" type="text" />
-                </label>
-                <label class="wide">
-                  <span>API key</span>
-                  <input data-path="vapi.apiKey" type="password" placeholder="leave blank to preserve" />
-                </label>
-              </div>
-            </section>
-
-            <section class="panel">
-              <div class="panel-header">
-                <div>
-                  <p class="eyebrow">Slack</p>
-                  <h2>Team Notifications</h2>
+              <div class="card">
+                <div class="form-group">
+                  <label class="form-label">Tech SMS</label>
+                  <textarea data-path="messageTemplates.techSms" rows="4"></textarea>
+                  <p class="hint">Sent to techs when dispatched</p>
                 </div>
               </div>
-              <p class="section-desc">When a new job comes in, the system posts a summary to Slack so your team can see it in real time. You can use either an incoming webhook or a bot token plus channel ID. Sensitive fields render blank after refresh; leaving them blank on save preserves the stored values.</p>
-              <div class="form-grid">
-                <label class="wide">
-                  <span>Webhook URL</span>
-                  <input data-path="slack.webhookUrl" type="text" placeholder="leave blank to preserve" />
-                </label>
-                <label>
-                  <span>Bot token</span>
-                  <input data-path="slack.botToken" type="password" placeholder="leave blank to preserve" />
-                </label>
-                <label>
-                  <span>Channel ID</span>
-                  <input data-path="slack.channelId" type="text" placeholder="C..." />
-                </label>
-                <label>
-                  <span>Channel label — just for display, e.g. #dispatch</span>
-                  <input data-path="slack.channelLabel" type="text" placeholder="#dispatch" />
-                </label>
-                <label class="checkbox">
-                  <input data-path="slack.enabled" type="checkbox" />
-                  <span>Enable Slack notifications</span>
-                </label>
+              <div class="card">
+                <div class="form-group">
+                  <label class="form-label">Partner SMS</label>
+                  <textarea data-path="messageTemplates.partnerSms" rows="4"></textarea>
+                  <p class="hint">Sent to partner companies when dispatched</p>
+                </div>
               </div>
-            </section>
-          </div>
+              <div class="card">
+                <div class="form-group">
+                  <label class="form-label">Acceptance confirmation</label>
+                  <textarea data-path="messageTemplates.acceptanceAck" rows="3"></textarea>
+                  <p class="hint">Sent when a tech accepts the job</p>
+                </div>
+              </div>
+              <p class="hint">Available tokens: <code>{{jobId}}</code>, <code>{{callerName}}</code>, <code>{{callbackNumber}}</code>, <code>{{serviceAddress}}</code>, <code>{{locationArea}}</code>, <code>{{issueType}}</code>, <code>{{urgency}}</code>, <code>{{summary}}</code>, <code>{{businessName}}</code>, <code>{{contactName}}</code></p>
+            </div>
+          </section>
+
+          <!-- ROUTING RULES -->
+          <section class="page" data-page="rules">
+            <div class="page-header">
+              <h1>Routing Rules</h1>
+              <p>Rules decide who gets called. Checked top to bottom by sort order. First match wins.</p>
+            </div>
+            <div class="section">
+              <div class="section-header">
+                <h2>Rules</h2>
+                <button id="add-rule" class="btn btn-secondary btn-sm">Add rule</button>
+              </div>
+              <div id="routing-rules" class="stack"></div>
+            </div>
+          </section>
+
+          <!-- INTEGRATIONS -->
+          <section class="page" data-page="integrations">
+            <div class="page-header">
+              <h1>Integrations</h1>
+              <p>Connect the services that power Phone Viking. Sensitive fields show blank after refresh — leave blank to keep the stored value.</p>
+            </div>
+            <div class="stack">
+              <div class="card">
+                <div class="card-header"><h3>Twilio — Phone Calls &amp; SMS</h3></div>
+                <div class="form-grid">
+                  <div class="form-group">
+                    <label class="form-label">Voice number</label>
+                    <input data-path="twilio.voiceNumber" type="text" placeholder="+1..." />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">SMS number</label>
+                    <input data-path="twilio.smsNumber" type="text" placeholder="+1..." />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Account SID</label>
+                    <input data-path="twilio.accountSid" type="text" placeholder="leave blank to preserve" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Auth token</label>
+                    <input data-path="twilio.authToken" type="password" placeholder="leave blank to preserve" />
+                  </div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header"><h3>Vapi — Voice Agent</h3></div>
+                <div class="form-grid">
+                  <div class="form-group">
+                    <label class="form-label">Dispatch assistant ID</label>
+                    <input data-path="vapi.dispatchAssistantId" type="text" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Phone number ID</label>
+                    <input data-path="vapi.phoneNumberId" type="text" />
+                  </div>
+                  <div class="form-group wide">
+                    <label class="form-label">API key</label>
+                    <input data-path="vapi.apiKey" type="password" placeholder="leave blank to preserve" />
+                  </div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header"><h3>Slack — Team Notifications</h3></div>
+                <div class="form-grid">
+                  <div class="form-group wide">
+                    <label class="form-label">Webhook URL</label>
+                    <input data-path="slack.webhookUrl" type="text" placeholder="leave blank to preserve" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Bot token</label>
+                    <input data-path="slack.botToken" type="password" placeholder="leave blank to preserve" />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Channel ID</label>
+                    <input data-path="slack.channelId" type="text" placeholder="C..." />
+                  </div>
+                  <div class="form-group">
+                    <label class="form-label">Channel label</label>
+                    <input data-path="slack.channelLabel" type="text" placeholder="#dispatch" />
+                  </div>
+                  <div class="checkbox-group">
+                    <input data-path="slack.enabled" type="checkbox" id="slack-enabled" />
+                    <label for="slack-enabled">Enable Slack notifications</label>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
         </div>
       </main>
     </div>
 
     <template id="field-template">
-      <article class="mini-card">
-        <div class="mini-card-grid">
-          <label>
-            <span>Field key</span>
+      <div class="card">
+        <div class="card-header">
+          <h3>Field</h3>
+          <button class="btn btn-danger btn-sm" data-action="remove">Remove</button>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Field key</label>
             <input data-prop="id" type="text" />
-          </label>
-          <label>
-            <span>Label</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Label</label>
             <input data-prop="label" type="text" />
-          </label>
-          <label>
-            <span>Input type</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Input type</label>
             <select data-prop="type">
               <option value="text">text</option>
               <option value="phone">phone</option>
@@ -342,178 +384,174 @@
               <option value="select">select</option>
               <option value="number">number</option>
             </select>
-          </label>
-          <label class="checkbox">
+          </div>
+          <div class="checkbox-group">
             <input data-prop="required" type="checkbox" />
-            <span>Required</span>
-          </label>
-          <label class="wide">
-            <span>Help text</span>
+            <label>Required</label>
+          </div>
+          <div class="form-group wide">
+            <label class="form-label">Help text</label>
             <input data-prop="helpText" type="text" />
-          </label>
+          </div>
         </div>
-        <button class="button button-danger" data-action="remove">Remove</button>
-      </article>
+      </div>
     </template>
 
     <template id="contact-template">
-      <article class="contact-card">
-        <div class="contact-head">
+      <div class="card">
+        <div class="card-header">
           <h3>Contact</h3>
-          <button class="button button-danger" data-action="remove">Remove</button>
+          <button class="btn btn-danger btn-sm" data-action="remove">Remove</button>
         </div>
-        <div class="mini-card-grid">
-          <label>
-            <span>Name</span>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Name</label>
             <input data-prop="name" type="text" />
-          </label>
-          <label>
-            <span>Company</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Company</label>
             <input data-prop="company" type="text" />
-          </label>
-          <label>
-            <span>Type</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Type</label>
             <select data-prop="type">
               <option value="tech">tech</option>
               <option value="partner">partner</option>
             </select>
-          </label>
-          <label>
-            <span>Priority tier</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Priority tier</label>
             <input data-prop="priorityTier" type="number" min="1" />
-          </label>
-          <label>
-            <span>Phone</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Phone</label>
             <input data-prop="phone" type="text" />
-          </label>
-          <label>
-            <span>SMS phone</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">SMS phone</label>
             <input data-prop="smsPhone" type="text" />
-          </label>
-          <label class="wide">
-            <span>Service areas</span>
-            <input data-prop="serviceAreasCsv" type="text" placeholder="NW Calgary,Downtown" />
-          </label>
-          <label class="wide">
-            <span>Availability</span>
-            <input data-prop="availability" type="text" placeholder="24/7 or evenings only" />
-          </label>
-          <label class="wide">
-            <span>Notes</span>
+          </div>
+          <div class="form-group wide">
+            <label class="form-label">Service areas (comma-separated)</label>
+            <input data-prop="serviceAreasCsv" type="text" placeholder="Fort McMurray, NW Calgary" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Availability</label>
+            <input data-prop="availability" type="text" placeholder="24/7" />
+          </div>
+          <div class="form-group wide">
+            <label class="form-label">Trade tags (comma-separated)</label>
+            <input data-prop="tradeTagsCsv" type="text" placeholder="hvac,plumbing" />
+          </div>
+          <div class="form-group wide">
+            <label class="form-label">Scenario tiers (JSON)</label>
+            <textarea data-prop="scenarioTiersJson" rows="2" placeholder='[{"issueType":"hvac","tier":1}]'></textarea>
+          </div>
+          <div class="form-group wide">
+            <label class="form-label">Notes</label>
             <input data-prop="notes" type="text" />
-          </label>
-          <label class="wide">
-            <span>Trade tags (comma-separated) — e.g. hvac,plumbing,refrigeration</span>
-            <input data-prop="tradeTagsCsv" type="text" />
-          </label>
-          <label class="wide">
-            <span>Scenario tiers (JSON) — override priority per issue type</span>
-            <textarea data-prop="scenarioTiersJson" rows="3" placeholder='[{"issueType":"hvac","tier":1},{"issueType":"plumbing","tier":3}]'></textarea>
-          </label>
-          <label class="checkbox">
+          </div>
+          <div class="checkbox-group">
             <input data-prop="active" type="checkbox" />
-            <span>Active</span>
-          </label>
-          <label class="checkbox">
+            <label>Active</label>
+          </div>
+          <div class="checkbox-group">
             <input data-prop="doNotUse" type="checkbox" />
-            <span>Do not use</span>
-          </label>
-          <label class="checkbox">
+            <label>Do not use</label>
+          </div>
+          <div class="checkbox-group">
             <input data-prop="mayReplaceSubcontractor" type="checkbox" />
-            <span>May replace subcontractor</span>
-          </label>
+            <label>May replace subcontractor</label>
+          </div>
         </div>
-      </article>
+      </div>
     </template>
 
     <template id="rule-template">
-      <article class="rule-card">
-        <div class="contact-head">
-          <div>
-            <p class="eyebrow">Combination</p>
-            <h3>Routing rule</h3>
-          </div>
-          <button class="button button-danger" data-action="remove">Remove</button>
+      <div class="card">
+        <div class="card-header">
+          <h3>Routing rule</h3>
+          <button class="btn btn-danger btn-sm" data-action="remove">Remove</button>
         </div>
-        <div class="mini-card-grid">
-          <label>
-            <span>Rule name</span>
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">Rule name</label>
             <input data-prop="name" type="text" />
-          </label>
-          <label>
-            <span>Sort order</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Sort order</label>
             <input data-prop="sortOrder" type="number" min="1" />
-          </label>
-          <label>
-            <span>Schedule mode</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Schedule mode</label>
             <select data-prop="conditions.scheduleMode">
               <option value="any">any</option>
               <option value="business-hours">business-hours</option>
               <option value="after-hours">after-hours</option>
             </select>
-          </label>
-          <label class="checkbox">
+          </div>
+          <div class="checkbox-group">
             <input data-prop="active" type="checkbox" />
-            <span>Active</span>
-          </label>
-          <label class="wide">
-            <span>Issue types</span>
-            <input data-prop="conditions.issueTypesCsv" type="text" placeholder="locksmith,hvac" />
-          </label>
-          <label>
-            <span>Urgencies</span>
-            <input data-prop="conditions.urgenciesCsv" type="text" placeholder="emergency,same-day" />
-          </label>
-          <label>
-            <span>Areas</span>
-            <input data-prop="conditions.areasCsv" type="text" placeholder="NW Calgary,Downtown" />
-          </label>
-          <label>
-            <span>Contact types</span>
+            <label>Active</label>
+          </div>
+          <div class="form-group wide">
+            <label class="form-label">Issue types (comma-separated)</label>
+            <input data-prop="conditions.issueTypesCsv" type="text" placeholder="hvac,plumbing" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Urgencies</label>
+            <input data-prop="conditions.urgenciesCsv" type="text" placeholder="emergency" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Areas</label>
+            <input data-prop="conditions.areasCsv" type="text" placeholder="Fort McMurray" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Contact types</label>
             <input data-prop="conditions.contactTypesCsv" type="text" placeholder="tech,partner" />
-          </label>
-          <label class="wide">
-            <span>Required trade tags</span>
+          </div>
+          <div class="form-group wide">
+            <label class="form-label">Required trade tags</label>
             <input data-prop="conditions.requiredTradeTagsCsv" type="text" placeholder="hvac,plumbing" />
-          </label>
-          <label>
-            <span>Initial tier</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Initial tier</label>
             <input data-prop="strategy.initialTier" type="number" min="1" />
-          </label>
-          <label>
-            <span>Batch size</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Batch size</label>
             <input data-prop="strategy.batchSize" type="number" min="1" />
-          </label>
-          <label>
-            <span>Escalate after (minutes)</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Escalate after (min)</label>
             <input data-prop="strategy.escalateAfterMinutes" type="number" min="1" />
-          </label>
-          <label>
-            <span>Sub replacement window (minutes)</span>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Sub replacement window (min)</label>
             <input data-prop="strategy.subReplacementWindowMinutes" type="number" min="1" />
-          </label>
-          <label class="checkbox">
+          </div>
+          <div class="checkbox-group">
             <input data-prop="strategy.leaveVoicemail" type="checkbox" />
-            <span>Leave voicemail</span>
-          </label>
-          <label class="checkbox">
+            <label>Leave voicemail</label>
+          </div>
+          <div class="checkbox-group">
             <input data-prop="strategy.sendSms" type="checkbox" />
-            <span>Send SMS</span>
-          </label>
-          <label class="checkbox">
+            <label>Send SMS</label>
+          </div>
+          <div class="checkbox-group">
             <input data-prop="strategy.notifySlackOnEscalation" type="checkbox" />
-            <span>Notify Slack on escalation</span>
-          </label>
-          <label class="wide">
-            <span>Target contacts</span>
+            <label>Notify Slack on escalation</label>
+          </div>
+          <div class="form-group wide">
+            <label class="form-label">Target contacts</label>
             <div class="contact-targets" data-role="targets"></div>
-          </label>
-          <label class="wide">
-            <span>Escalation sequence JSON</span>
-            <textarea data-prop="strategy.escalationSequenceJson" rows="8" placeholder='[{"contactId":"contact_test_tech","partner":false}]'></textarea>
-          </label>
+          </div>
+          <div class="form-group wide">
+            <label class="form-label">Escalation sequence (JSON)</label>
+            <textarea data-prop="strategy.escalationSequenceJson" rows="5" placeholder='[{"contactId":"contact_test_tech","partner":false}]'></textarea>
+          </div>
         </div>
-      </article>
+      </div>
     </template>
 
     <script src="/app.js" defer></script>
