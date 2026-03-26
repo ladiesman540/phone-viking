@@ -2627,37 +2627,37 @@ async function handleApi(req, res, pathname, url) {
     return sendJson(res, 200, results);
   }
 
-  if (req.method === "PUT" && pathname === "/api/vapi/assistants/intake") {
+  if (req.method === "PUT" && (pathname === "/api/vapi/assistants/intake" || pathname === "/api/vapi/assistants/dispatch")) {
     const vapiKey = normalizeString(config.vapi?.apiKey);
     if (!vapiKey) throw new HttpError(400, "Vapi API key not configured.");
     const body = await parseBody(req);
-    const intakeId = "88c54524-9148-41f5-952f-5e35808f8e93";
-    const resp = await fetch(`${config.vapi?.baseUrl || "https://api.vapi.ai"}/assistant/${intakeId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${vapiKey}` },
-      signal: withTimeoutSignal(),
-      body: JSON.stringify({ model: { messages: [{ role: "system", content: normalizeString(body.prompt) }], model: "gpt-4o-mini", provider: "openai" } })
-    });
-    const result = await resp.json();
-    log("vapi-assistant-update", { assistantId: intakeId, ok: resp.ok });
-    return sendJson(res, resp.ok ? 200 : 500, { success: resp.ok, updatedAt: result.updatedAt, error: result.message || null });
-  }
+    const isIntake = pathname.endsWith("/intake");
+    const assistantId = isIntake ? "88c54524-9148-41f5-952f-5e35808f8e93" : normalizeString(config.vapi?.dispatchAssistantId);
+    if (!assistantId) throw new HttpError(400, "Assistant ID not configured.");
+    const baseUrl = config.vapi?.baseUrl || "https://api.vapi.ai";
 
-  if (req.method === "PUT" && pathname === "/api/vapi/assistants/dispatch") {
-    const vapiKey = normalizeString(config.vapi?.apiKey);
-    if (!vapiKey) throw new HttpError(400, "Vapi API key not configured.");
-    const body = await parseBody(req);
-    const dispatchId = normalizeString(config.vapi?.dispatchAssistantId);
-    if (!dispatchId) throw new HttpError(400, "Dispatch assistant ID not configured.");
-    const resp = await fetch(`${config.vapi?.baseUrl || "https://api.vapi.ai"}/assistant/${dispatchId}`, {
+    // Fetch existing assistant to preserve toolIds and other model fields
+    const existingResp = await fetch(`${baseUrl}/assistant/${assistantId}`, { headers: { Authorization: `Bearer ${vapiKey}` }, signal: withTimeoutSignal() });
+    const existing = await existingResp.json();
+    const existingModel = existing.model || {};
+
+    // Only replace the system message content, keep everything else
+    const updatedModel = {
+      ...existingModel,
+      messages: [{ role: "system", content: body.prompt }]
+    };
+
+    const resp = await fetch(`${baseUrl}/assistant/${assistantId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${vapiKey}` },
       signal: withTimeoutSignal(),
-      body: JSON.stringify({ model: { messages: [{ role: "system", content: normalizeString(body.prompt) }], model: "gpt-4o-mini", provider: "openai" } })
+      body: JSON.stringify({ model: updatedModel })
     });
     const result = await resp.json();
-    log("vapi-assistant-update", { assistantId: dispatchId, ok: resp.ok });
-    return sendJson(res, resp.ok ? 200 : 500, { success: resp.ok, updatedAt: result.updatedAt, error: result.message || null });
+    const savedPromptLen = result.model?.messages?.[0]?.content?.length || 0;
+    const savedToolIds = result.model?.toolIds || [];
+    log("vapi-assistant-update", { assistantId, ok: resp.ok, promptLength: savedPromptLen, toolIds: savedToolIds });
+    return sendJson(res, resp.ok ? 200 : 500, { success: resp.ok, updatedAt: result.updatedAt, promptLength: savedPromptLen, toolIds: savedToolIds, error: result.message || null });
   }
 
   sendJson(res, 404, { error: "Not found." });
