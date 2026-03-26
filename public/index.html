@@ -19,6 +19,7 @@
           <button class="nav-item nav-sub-item" data-page="flow">How It Works</button>
           <button class="nav-item nav-sub-item" data-page="workspace">Workspace</button>
           <button class="nav-item nav-sub-item" data-page="intake">Intake Questions</button>
+          <button class="nav-item nav-sub-item" data-page="agents">AI Agents</button>
           <button class="nav-item nav-sub-item" data-page="templates">Message Templates</button>
           <button class="nav-item nav-sub-item" data-page="rules">Routing Rules</button>
           <button class="nav-item nav-sub-item" data-page="integrations">Integrations</button>
@@ -226,6 +227,46 @@
                 <button id="add-field" class="btn btn-secondary btn-sm">Add field</button>
               </div>
               <div id="intake-fields" class="stack"></div>
+            </div>
+          </section>
+
+          <!-- AI AGENTS -->
+          <section class="page" data-page="agents">
+            <div class="page-header">
+              <h1>AI Agents</h1>
+              <p>Edit the system prompts for the intake and dispatch voice agents. Changes push directly to Vapi when you click "Push to Vapi."</p>
+            </div>
+            <div class="stack">
+              <div class="card">
+                <div class="card-header">
+                  <h3>Intake Agent</h3>
+                  <div class="btn-row">
+                    <button id="push-intake" class="btn btn-primary btn-sm">Push to Vapi</button>
+                    <button id="pull-intake" class="btn btn-secondary btn-sm">Pull from Vapi</button>
+                  </div>
+                </div>
+                <p class="section-desc">This agent answers incoming after-hours calls. It triages emergencies, collects caller info, and calls the <code>create_job</code> function to dispatch.</p>
+                <div class="form-group">
+                  <label class="form-label">System prompt</label>
+                  <textarea id="intake-prompt" rows="24" style="font-family:var(--font-mono);font-size:12px;min-height:400px"></textarea>
+                </div>
+                <p class="hint" id="intake-status"></p>
+              </div>
+              <div class="card">
+                <div class="card-header">
+                  <h3>Dispatch Agent</h3>
+                  <div class="btn-row">
+                    <button id="push-dispatch" class="btn btn-primary btn-sm">Push to Vapi</button>
+                    <button id="pull-dispatch" class="btn btn-secondary btn-sm">Pull from Vapi</button>
+                  </div>
+                </div>
+                <p class="section-desc">This agent makes outbound calls to techs. It describes the job, gets a yes/no, and calls <code>report_response</code> to log the answer.</p>
+                <div class="form-group">
+                  <label class="form-label">System prompt</label>
+                  <textarea id="dispatch-prompt" rows="24" style="font-family:var(--font-mono);font-size:12px;min-height:400px"></textarea>
+                </div>
+                <p class="hint" id="dispatch-status"></p>
+              </div>
             </div>
           </section>
 

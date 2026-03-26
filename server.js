@@ -2605,6 +2605,61 @@ async function handleApi(req, res, pathname, url) {
     return sendJson(res, 200, { success: true, job });
   }
 
+  // Vapi assistant prompt management
+  if (req.method === "GET" && pathname === "/api/vapi/assistants") {
+    const vapiKey = normalizeString(config.vapi?.apiKey);
+    if (!vapiKey) return sendJson(res, 200, { intake: null, dispatch: null });
+    const intakeId = "88c54524-9148-41f5-952f-5e35808f8e93";
+    const dispatchId = normalizeString(config.vapi?.dispatchAssistantId);
+    const results = {};
+    try {
+      const intakeResp = await fetch(`${config.vapi?.baseUrl || "https://api.vapi.ai"}/assistant/${intakeId}`, { headers: { Authorization: `Bearer ${vapiKey}` }, signal: withTimeoutSignal() });
+      const intakeData = await intakeResp.json();
+      results.intake = { id: intakeId, prompt: intakeData.model?.messages?.[0]?.content || "", model: intakeData.model?.model || "" };
+    } catch (e) { results.intake = { error: e.message }; }
+    try {
+      if (dispatchId) {
+        const dispResp = await fetch(`${config.vapi?.baseUrl || "https://api.vapi.ai"}/assistant/${dispatchId}`, { headers: { Authorization: `Bearer ${vapiKey}` }, signal: withTimeoutSignal() });
+        const dispData = await dispResp.json();
+        results.dispatch = { id: dispatchId, prompt: dispData.model?.messages?.[0]?.content || "", model: dispData.model?.model || "" };
+      }
+    } catch (e) { results.dispatch = { error: e.message }; }
+    return sendJson(res, 200, results);
+  }
+
+  if (req.method === "PUT" && pathname === "/api/vapi/assistants/intake") {
+    const vapiKey = normalizeString(config.vapi?.apiKey);
+    if (!vapiKey) throw new HttpError(400, "Vapi API key not configured.");
+    const body = await parseBody(req);
+    const intakeId = "88c54524-9148-41f5-952f-5e35808f8e93";
+    const resp = await fetch(`${config.vapi?.baseUrl || "https://api.vapi.ai"}/assistant/${intakeId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${vapiKey}` },
+      signal: withTimeoutSignal(),
+      body: JSON.stringify({ model: { messages: [{ role: "system", content: normalizeString(body.prompt) }], model: "gpt-4o-mini", provider: "openai" } })
+    });
+    const result = await resp.json();
+    log("vapi-assistant-update", { assistantId: intakeId, ok: resp.ok });
+    return sendJson(res, resp.ok ? 200 : 500, { success: resp.ok, updatedAt: result.updatedAt, error: result.message || null });
+  }
+
+  if (req.method === "PUT" && pathname === "/api/vapi/assistants/dispatch") {
+    const vapiKey = normalizeString(config.vapi?.apiKey);
+    if (!vapiKey) throw new HttpError(400, "Vapi API key not configured.");
+    const body = await parseBody(req);
+    const dispatchId = normalizeString(config.vapi?.dispatchAssistantId);
+    if (!dispatchId) throw new HttpError(400, "Dispatch assistant ID not configured.");
+    const resp = await fetch(`${config.vapi?.baseUrl || "https://api.vapi.ai"}/assistant/${dispatchId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${vapiKey}` },
+      signal: withTimeoutSignal(),
+      body: JSON.stringify({ model: { messages: [{ role: "system", content: normalizeString(body.prompt) }], model: "gpt-4o-mini", provider: "openai" } })
+    });
+    const result = await resp.json();
+    log("vapi-assistant-update", { assistantId: dispatchId, ok: resp.ok });
+    return sendJson(res, resp.ok ? 200 : 500, { success: resp.ok, updatedAt: result.updatedAt, error: result.message || null });
+  }
+
   sendJson(res, 404, { error: "Not found." });
 }
 

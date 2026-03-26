@@ -323,6 +323,7 @@ function render() {
   else if (page === "messages") renderMessages();
   else if (page === "intake") { bindRootInputs(); renderIntakeFields(); }
   else if (page === "rules") { bindRootInputs(); renderRoutingRules(); }
+  else if (page === "agents") { if (!document.querySelector("#intake-prompt").value) pullAgentPrompts().catch(() => {}); }
   else if (page === "workspace" || page === "integrations" || page === "templates") bindRootInputs();
 }
 
@@ -668,6 +669,36 @@ async function closeJob(jobId) {
   openJobDetail(jobId);
 }
 
+// ---- AI Agents ----
+
+async function pullAgentPrompts() {
+  const data = await fetchJson("/api/vapi/assistants");
+  if (data.intake?.prompt) document.querySelector("#intake-prompt").value = data.intake.prompt;
+  if (data.dispatch?.prompt) document.querySelector("#dispatch-prompt").value = data.dispatch.prompt;
+  document.querySelector("#intake-status").textContent = data.intake?.error ? `Error: ${data.intake.error}` : "Pulled from Vapi.";
+  document.querySelector("#dispatch-status").textContent = data.dispatch?.error ? `Error: ${data.dispatch.error}` : "Pulled from Vapi.";
+}
+
+async function pushIntakePrompt() {
+  const prompt = document.querySelector("#intake-prompt").value;
+  const status = document.querySelector("#intake-status");
+  status.textContent = "Pushing...";
+  try {
+    const result = await fetchJson("/api/vapi/assistants/intake", { method: "PUT", body: JSON.stringify({ prompt }) });
+    status.textContent = result.success ? `Pushed to Vapi at ${new Date(result.updatedAt).toLocaleTimeString()}` : `Error: ${result.error}`;
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
+async function pushDispatchPrompt() {
+  const prompt = document.querySelector("#dispatch-prompt").value;
+  const status = document.querySelector("#dispatch-status");
+  status.textContent = "Pushing...";
+  try {
+    const result = await fetchJson("/api/vapi/assistants/dispatch", { method: "PUT", body: JSON.stringify({ prompt }) });
+    status.textContent = result.success ? `Pushed to Vapi at ${new Date(result.updatedAt).toLocaleTimeString()}` : `Error: ${result.error}`;
+  } catch (err) { status.textContent = `Error: ${err.message}`; }
+}
+
 // ---- Wire everything ----
 
 function wireActions() {
@@ -688,6 +719,10 @@ function wireActions() {
   };
   document.querySelector("#create-job").onclick = () => { createTestJob().catch((err) => { elements.jobResult.textContent = err.message; }); };
   document.querySelector("#job-detail-back").onclick = closeJobDetail;
+  document.querySelector("#pull-intake").onclick = () => pullAgentPrompts().catch((err) => { document.querySelector("#intake-status").textContent = err.message; });
+  document.querySelector("#pull-dispatch").onclick = () => pullAgentPrompts().catch((err) => { document.querySelector("#dispatch-status").textContent = err.message; });
+  document.querySelector("#push-intake").onclick = () => pushIntakePrompt();
+  document.querySelector("#push-dispatch").onclick = () => pushDispatchPrompt();
 }
 
 // ---- Init ----
